@@ -81,7 +81,7 @@
               BorderThickness="0,0,0,1"
               Padding="4,2">
             <MenuItem Header="_File">
-                <MenuItem Header="新規プロジェクト..." />
+                <MenuItem Header="新規プロジェクト..." Click="NewProjectMenuItem_Click" />
                 <MenuItem Header="プロジェクトにフォルダーを追加..." />
                 <Separator />
                 <MenuItem Header="終了" />
@@ -131,13 +131,17 @@
                     </Grid>
                 </Border>
 
-                <ComboBox Grid.Column="1"
+                <ComboBox x:Name="ProjectComboBox"
+                          Grid.Column="1"
                           Height="36"
                           Margin="0,0,8,0"
                           VerticalContentAlignment="Center"
-                          ToolTip="プロジェクトを選択">
-                    <ComboBoxItem Content="プロジェクトを選択" IsSelected="True" />
-                </ComboBox>
+                          DisplayMemberPath="Name"
+                          IsEditable="True"
+                          IsReadOnly="True"
+                          Text="プロジェクトを選択"
+                          SelectionChanged="ProjectComboBox_SelectionChanged"
+                          ToolTip="プロジェクトを選択" />
 
                 <ToggleButton Grid.Column="2"
                               Style="{StaticResource ToolbarButtonStyle}"
@@ -203,10 +207,12 @@
                                    Text="フォルダー" />
                     </Border>
                     <Grid>
-                        <TreeView Margin="6"
+                        <TreeView x:Name="FolderTreeView"
+                                  Margin="6"
                                   Background="Transparent"
                                   BorderThickness="0" />
-                        <TextBlock Margin="18"
+                        <TextBlock x:Name="FolderPlaceholderText"
+                                   Margin="18"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    TextAlignment="Center"
@@ -263,7 +269,8 @@
                 Padding="12,0">
             <TextBlock VerticalAlignment="Center"
                        Foreground="#65707D"
-                       Text="準備完了" />
+                       x:Name="StatusText"
+                       Text="" />
         </Border>
     </Grid>
 </Window>
