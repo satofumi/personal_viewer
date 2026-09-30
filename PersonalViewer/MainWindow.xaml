@@ -81,8 +81,12 @@
               BorderThickness="0,0,0,1"
               Padding="4,2">
             <MenuItem Header="_File">
-                <MenuItem Header="新規プロジェクト..." Click="NewProjectMenuItem_Click" />
-                <MenuItem Header="プロジェクトにフォルダーを追加..." />
+                <MenuItem x:Name="NewProjectMenuItem"
+                          Header="新規プロジェクト..."
+                          Click="NewProjectMenuItem_Click" />
+                <MenuItem x:Name="AddFolderMenuItem"
+                          Header="プロジェクトにフォルダーを追加..."
+                          Click="AddFolderMenuItem_Click" />
                 <Separator />
                 <MenuItem Header="終了" />
             </MenuItem>
@@ -136,10 +140,7 @@
                           Height="36"
                           Margin="0,0,8,0"
                           VerticalContentAlignment="Center"
-                          DisplayMemberPath="Name"
-                          IsEditable="True"
-                          IsReadOnly="True"
-                          Text="プロジェクトを選択"
+                          IsEditable="False"
                           SelectionChanged="ProjectComboBox_SelectionChanged"
                           ToolTip="プロジェクトを選択" />
 

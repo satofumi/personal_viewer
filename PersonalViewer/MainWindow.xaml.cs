@@ -2,8 +2,10 @@
 using System.Security;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using PersonalViewer.Configuration;
 using PersonalViewer.Projects;
 
@@ -11,6 +13,7 @@ namespace PersonalViewer;
 
 public partial class MainWindow : Window
 {
+    private const string ProjectSelectorPlaceholder = "プロジェクトを選択";
     private static readonly object LazyChildPlaceholder = new();
     private static readonly TimeSpan StatusMessageDuration = TimeSpan.FromSeconds(5);
 
@@ -19,8 +22,11 @@ public partial class MainWindow : Window
     {
         Interval = StatusMessageDuration
     };
+    private readonly MediaFileScanner _mediaFileScanner = new();
+    private readonly ProjectFileIndexStore _projectFileIndexStore = new();
     private IReadOnlyList<ProjectInfo> _projects = [];
     private bool _suppressProjectSelectionChanged;
+    private bool _scanInProgress;
 
     public ProjectInfo? CurrentProject { get; private set; }
 
@@ -90,9 +96,31 @@ public partial class MainWindow : Window
         _suppressProjectSelectionChanged = true;
         try
         {
-            ProjectComboBox.ItemsSource = _projects;
-            ProjectComboBox.SelectedItem = selectedProject;
-            CurrentProject = selectedProject;
+            ProjectComboBox.Items.Clear();
+            var placeholderItem = new ComboBoxItem
+            {
+                Content = ProjectSelectorPlaceholder
+            };
+            ProjectComboBox.Items.Add(placeholderItem);
+
+            ComboBoxItem? selectedItem = null;
+            foreach (var project in _projects)
+            {
+                var projectItem = new ComboBoxItem
+                {
+                    Content = project.Name,
+                    Tag = project
+                };
+                ProjectComboBox.Items.Add(projectItem);
+                if (selectedProject is not null
+                    && StringComparer.OrdinalIgnoreCase.Equals(project.ProjectId, selectedProject.ProjectId))
+                {
+                    selectedItem = projectItem;
+                }
+            }
+
+            ProjectComboBox.SelectedItem = selectedItem ?? placeholderItem;
+            CurrentProject = selectedItem?.Tag as ProjectInfo;
             RefreshFolderTree();
         }
         finally
@@ -108,7 +136,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        CurrentProject = ProjectComboBox.SelectedItem as ProjectInfo;
+        CurrentProject = (ProjectComboBox.SelectedItem as ComboBoxItem)?.Tag as ProjectInfo;
         RefreshFolderTree();
         SaveLastProjectId(CurrentProject?.ProjectId);
         if (CurrentProject is not null)
@@ -147,6 +175,15 @@ public partial class MainWindow : Window
             Header = CreateFolderHeader(folderName),
             Tag = folderNode
         };
+        var rescanMenuItem = new MenuItem
+        {
+            Header = "再スキャン",
+            Tag = folderNode
+        };
+        rescanMenuItem.Click += RescanFolderMenuItem_Click;
+        item.ContextMenu = new ContextMenu();
+        item.ContextMenu.Items.Add(rescanMenuItem);
+        item.PreviewMouseRightButtonDown += FolderTreeItem_PreviewMouseRightButtonDown;
         if (folderNode.HasSubfolders)
         {
             item.Items.Add(new TreeViewItem
@@ -159,6 +196,15 @@ public partial class MainWindow : Window
         }
 
         return item;
+    }
+
+    private void FolderTreeItem_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is TreeViewItem item)
+        {
+            item.IsSelected = true;
+            item.Focus();
+        }
     }
 
     private static StackPanel CreateFolderHeader(string folderName)
@@ -253,8 +299,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NewProjectMenuItem_Click(object sender, RoutedEventArgs e)
+    private async void NewProjectMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (_scanInProgress)
+        {
+            return;
+        }
+
         var app = (App)Application.Current;
         var dialog = new NewProjectWindow(app.Settings)
         {
@@ -266,26 +317,215 @@ public partial class MainWindow : Window
             return;
         }
 
+        ProjectInfo savedProject;
         try
         {
-            var savedProject = _projectStore.Save(dialog.CreatedProject);
-            _projects = _projects
-                .Where(project => !StringComparer.OrdinalIgnoreCase.Equals(project.ProjectId, savedProject.ProjectId))
-                .Append(savedProject)
-                .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            SetProjectItems(savedProject);
-            SaveLastProjectId(savedProject.ProjectId);
-            ShowStatusMessage($"プロジェクト「{savedProject.Name}」を作成し、選択しました。");
+            savedProject = _projectStore.Save(dialog.CreatedProject);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ProjectDataException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ProjectDataException or SecurityException)
         {
             MessageBox.Show(
-                $"プロジェクトを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                $"プロジェクトを作成できませんでした。{Environment.NewLine}{exception.Message}",
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
+            return;
         }
+
+        UpsertProject(savedProject);
+        SetProjectItems(savedProject);
+        SaveLastProjectId(savedProject.ProjectId);
+        await ScanAndSaveIndexAsync(
+            savedProject,
+            app.Settings,
+            folderPath: null,
+            mergeWithExistingIndex: false,
+            "プロジェクトのフォルダーをスキャンしています...",
+            "プロジェクトを作成し、スキャンしました。",
+            "プロジェクトは作成しましたが、初回スキャンに失敗しました。");
+    }
+
+    private async void AddFolderMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_scanInProgress)
+        {
+            return;
+        }
+
+        if (CurrentProject is null)
+        {
+            ShowStatusMessage("先にプロジェクトを選択してください。");
+            return;
+        }
+
+        var project = CurrentProject;
+        var dialog = new OpenFolderDialog
+        {
+            Title = "追加するフォルダーを選択",
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        var folderPath = NormalizeFolderPath(dialog.FolderName);
+        if (!Directory.Exists(folderPath))
+        {
+            ShowStatusMessage("選択したフォルダーが見つかりません。");
+            return;
+        }
+
+        if (project.Folders.Any(folder =>
+                StringComparer.OrdinalIgnoreCase.Equals(NormalizeFolderPath(folder), folderPath)))
+        {
+            ShowStatusMessage("そのフォルダーは既にプロジェクトに登録されています。");
+            return;
+        }
+
+        var updatedProject = new ProjectInfo
+        {
+            ProjectId = project.ProjectId,
+            Name = project.Name,
+            MediaType = project.MediaType,
+            Folders = project.Folders.Append(folderPath).ToList()
+        };
+
+        ProjectInfo savedProject;
+        try
+        {
+            savedProject = _projectStore.Save(updatedProject);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ProjectDataException or SecurityException)
+        {
+            MessageBox.Show(
+                $"フォルダーをプロジェクトに追加できませんでした。{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        UpsertProject(savedProject);
+        var selectedProject = CurrentProject is not null
+            && StringComparer.OrdinalIgnoreCase.Equals(CurrentProject.ProjectId, savedProject.ProjectId)
+                ? savedProject
+                : CurrentProject;
+        SetProjectItems(selectedProject);
+        await ScanAndSaveIndexAsync(
+            savedProject,
+            ((App)Application.Current).Settings,
+            folderPath,
+            mergeWithExistingIndex: true,
+            "追加したフォルダーをスキャンしています...",
+            "フォルダーを追加し、スキャンしました。",
+            "フォルダーは追加しましたが、そのフォルダーのスキャンに失敗しました。");
+    }
+
+    private async void RescanFolderMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_scanInProgress || sender is not MenuItem { Tag: FolderTreeNode folderNode })
+        {
+            return;
+        }
+
+        var project = CurrentProject;
+        if (project is null)
+        {
+            return;
+        }
+
+        var app = (App)Application.Current;
+        var folderName = Path.GetFileName(folderNode.FullPath);
+        if (string.IsNullOrWhiteSpace(folderName))
+        {
+            folderName = folderNode.FullPath;
+        }
+
+        await ScanAndSaveIndexAsync(
+            project,
+            app.Settings,
+            folderNode.FullPath,
+            mergeWithExistingIndex: true,
+            $"フォルダー「{folderName}」を再スキャンしています...",
+            $"フォルダー「{folderName}」を再スキャンしました。",
+            $"フォルダー「{folderName}」の再スキャンに失敗しました。");
+    }
+
+    private void UpsertProject(ProjectInfo project)
+    {
+        _projects = _projects
+            .Where(existing => !StringComparer.OrdinalIgnoreCase.Equals(existing.ProjectId, project.ProjectId))
+            .Append(project)
+            .OrderBy(existing => existing.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private async Task ScanAndSaveIndexAsync(
+        ProjectInfo project,
+        AppSettings settings,
+        string? folderPath,
+        bool mergeWithExistingIndex,
+        string progressMessage,
+        string completionMessage,
+        string failureMessage)
+    {
+        SetScanInProgress(true);
+        ShowStatusMessage(progressMessage, dismissAfterDelay: false);
+        try
+        {
+            var scannedFiles = await Task.Run(() =>
+                folderPath is null
+                    ? _mediaFileScanner.Scan(project, settings)
+                    : _mediaFileScanner.ScanFolder(project, folderPath, settings));
+
+            await Task.Run(() =>
+            {
+                IEnumerable<IndexedFile> filesToSave = scannedFiles;
+                if (mergeWithExistingIndex)
+                {
+                    filesToSave = _projectFileIndexStore.Load(project).Concat(scannedFiles);
+                }
+
+                _projectFileIndexStore.Save(project, filesToSave);
+            });
+
+            if (IsVisible)
+            {
+                ShowStatusMessage(completionMessage);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
+        {
+            if (IsVisible)
+            {
+                MessageBox.Show(
+                    this,
+                    $"{failureMessage}{Environment.NewLine}{exception.Message}",
+                    "Personal Viewer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                ShowStatusMessage("スキャンに失敗しました。");
+            }
+        }
+        finally
+        {
+            SetScanInProgress(false);
+        }
+    }
+
+    private void SetScanInProgress(bool inProgress)
+    {
+        _scanInProgress = inProgress;
+        ProjectComboBox.IsEnabled = !inProgress;
+        FolderTreeView.IsEnabled = !inProgress;
+        NewProjectMenuItem.IsEnabled = !inProgress;
+        AddFolderMenuItem.IsEnabled = !inProgress;
+    }
+
+    private static string NormalizeFolderPath(string folderPath)
+    {
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath));
     }
 
     private sealed record FolderTreeNode(string FullPath, bool HasSubfolders);
