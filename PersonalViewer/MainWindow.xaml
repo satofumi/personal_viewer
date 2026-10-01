@@ -317,7 +317,16 @@
                                   ItemsPanel="{StaticResource ResultsItemsPanelTemplate}"
                                   SelectionMode="Extended"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  MouseDoubleClick="ResultsListView_MouseDoubleClick"
+                                  PreviewMouseRightButtonDown="ResultsListView_PreviewMouseRightButtonDown"
+                                  ContextMenuOpening="ResultsListView_ContextMenuOpening"
                                   GridViewColumnHeader.Click="ResultsListView_ColumnHeaderClick">
+                            <ListView.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="エクスプローラーで開く"
+                                              Click="ShowInExplorerMenuItem_Click" />
+                                </ContextMenu>
+                            </ListView.ContextMenu>
                             <ListView.View>
                                 <GridView x:Name="DetailsGridView">
                                     <GridViewColumn Header="ファイル名"

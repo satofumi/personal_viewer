@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Diagnostics;
 using Microsoft.Win32;
 using System.ComponentModel;
 using PersonalViewer.Configuration;
@@ -40,6 +41,7 @@ public partial class MainWindow : Window
     private bool _showThumbnailView;
     private CancellationTokenSource? _thumbnailLoadCancellation;
     private CancellationTokenSource? _keywordSearchCancellation;
+    private SearchResultItem? _contextMenuTarget;
 
     public ProjectInfo? CurrentProject { get; private set; }
 
@@ -298,10 +300,13 @@ public partial class MainWindow : Window
 
         try
         {
-            await Task.Delay(KeywordSearchDebounceDuration, cancellationToken);
-            var results = await Task.Run(
-                () => SearchProjectFiles(project, query, cancellationToken),
-                cancellationToken);
+            await Task.Delay(KeywordSearchDebounceDuration);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var results = await Task.Run(() => SearchProjectFiles(project, query, cancellationToken));
 
             if (IsCurrentKeywordSearch(query, cancellation))
             {
@@ -340,11 +345,19 @@ public partial class MainWindow : Window
         string query,
         CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return [];
+        }
+
         var indexedFiles = _projectFileIndexStore.Load(project);
         var results = new List<SearchResultItem>();
         foreach (var file in indexedFiles)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return [];
+            }
 
             var fileName = Path.GetFileName(file.Path);
             if (fileName.Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -570,6 +583,103 @@ public partial class MainWindow : Window
                 ? _sortAscending ? " ▲" : " ▼"
                 : string.Empty;
             DetailsGridView.Columns[index].Header = labels[index] + indicator;
+        }
+    }
+
+    private void ResultsListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(ResultsListView, source) is not ListViewItem item
+            || item.DataContext is not SearchResultItem result)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = result.File.Path,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException or ArgumentException)
+        {
+            MessageBox.Show(
+                this,
+                $"ファイルを開けませんでした。{Environment.NewLine}{result.File.Path}{Environment.NewLine}{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void ResultsListView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _contextMenuTarget = null;
+        if (e.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(ResultsListView, source) is not ListViewItem item
+            || item.DataContext is not SearchResultItem result)
+        {
+            return;
+        }
+
+        _contextMenuTarget = result;
+        if (!item.IsSelected)
+        {
+            ResultsListView.SelectedItems.Clear();
+            item.IsSelected = true;
+        }
+
+        item.Focus();
+    }
+
+    private void ResultsListView_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (_contextMenuTarget is null)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private void ShowInExplorerMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var result = _contextMenuTarget;
+        _contextMenuTarget = null;
+        if (result is null)
+        {
+            return;
+        }
+
+        if (!File.Exists(result.File.Path))
+        {
+            MessageBox.Show(
+                this,
+                $"ファイルが見つかりません。再スキャンしてください。{Environment.NewLine}{result.File.Path}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{result.File.Path}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException or ArgumentException)
+        {
+            MessageBox.Show(
+                this,
+                $"エクスプローラーでファイルを表示できませんでした。{Environment.NewLine}{result.File.Path}{Environment.NewLine}{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 
