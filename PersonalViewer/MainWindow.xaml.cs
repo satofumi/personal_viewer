@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private const string ProjectSelectorPlaceholder = "プロジェクトを選択";
     private static readonly object LazyChildPlaceholder = new();
     private static readonly TimeSpan StatusMessageDuration = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan KeywordSearchDebounceDuration = TimeSpan.FromMilliseconds(180);
 
     private readonly ProjectStore _projectStore = new();
     private readonly DispatcherTimer _statusMessageTimer = new()
@@ -30,6 +31,7 @@ public partial class MainWindow : Window
     private bool _settingFolderSearchText;
     private bool _scanInProgress;
     private SearchMode _searchMode;
+    private CancellationTokenSource? _keywordSearchCancellation;
 
     public ProjectInfo? CurrentProject { get; private set; }
 
@@ -37,9 +39,20 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _statusMessageTimer.Tick += StatusMessageTimer_Tick;
-        Closed += (_, _) => _statusMessageTimer.Stop();
+        Closed += (_, _) =>
+        {
+            _statusMessageTimer.Stop();
+            CancelKeywordSearch();
+        };
+        Loaded += MainWindow_Loaded;
         ShowStatusMessage("準備完了");
         LoadProjectsAndRestoreSelection();
+    }
+
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        SearchTextBox.Focus();
+        Keyboard.Focus(SearchTextBox);
     }
 
     private void ShowStatusMessage(string message, bool dismissAfterDelay = true)
@@ -221,7 +234,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    private async void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         SearchPlaceholderText.Visibility = string.IsNullOrEmpty(SearchTextBox.Text)
             ? Visibility.Visible
@@ -244,15 +257,110 @@ public partial class MainWindow : Window
         switch (_searchMode)
         {
             case SearchMode.Empty:
+                CancelKeywordSearch();
                 SetSearchResults([], "検索欄にキーワードを入力するか、フォルダーを選択してください");
                 break;
             case SearchMode.Folder when FolderTreeView.SelectedItem is TreeViewItem { Tag: FolderTreeNode folderNode }:
+                CancelKeywordSearch();
                 ShowFolderResults(folderNode);
                 break;
             case SearchMode.Keyword:
-                SetSearchResults([], "キーワード検索結果はここに表示されます");
+                await ShowKeywordSearchResultsAsync(SearchTextBox.Text, CurrentProject);
                 break;
         }
+    }
+
+    private async Task ShowKeywordSearchResultsAsync(string query, ProjectInfo? project)
+    {
+        CancelKeywordSearch();
+        if (project is null)
+        {
+            SetSearchResults([], "プロジェクトを選択してください");
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _keywordSearchCancellation = cancellation;
+        var cancellationToken = cancellation.Token;
+        SetSearchResults([], "検索しています...");
+
+        try
+        {
+            await Task.Delay(KeywordSearchDebounceDuration, cancellationToken);
+            var results = await Task.Run(
+                () => SearchProjectFiles(project, query, cancellationToken),
+                cancellationToken);
+
+            if (IsCurrentKeywordSearch(query, cancellation))
+            {
+                SetSearchResults(results, "一致するファイルはありません");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
+        {
+            if (IsCurrentKeywordSearch(query, cancellation))
+            {
+                SetSearchResults([], "ファイル一覧を読み込めませんでした");
+                MessageBox.Show(
+                    this,
+                    $"ファイル一覧を読み込めませんでした。{Environment.NewLine}{exception.Message}",
+                    "Personal Viewer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_keywordSearchCancellation, cancellation))
+            {
+                _keywordSearchCancellation = null;
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private IReadOnlyCollection<SearchResultItem> SearchProjectFiles(
+        ProjectInfo project,
+        string query,
+        CancellationToken cancellationToken)
+    {
+        var indexedFiles = _projectFileIndexStore.Load(project);
+        var results = new List<SearchResultItem>();
+        foreach (var file in indexedFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var fileName = Path.GetFileName(file.Path);
+            if (fileName.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || file.Tags.Any(tag => tag.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            {
+                results.Add(new SearchResultItem(file, fileName));
+            }
+        }
+
+        return results
+            .OrderBy(result => result.FileName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(result => result.File.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private bool IsCurrentKeywordSearch(string query, CancellationTokenSource cancellation)
+    {
+        return !cancellation.IsCancellationRequested
+            && IsVisible
+            && _searchMode == SearchMode.Keyword
+            && StringComparer.Ordinal.Equals(SearchTextBox.Text, query);
+    }
+
+    private void CancelKeywordSearch()
+    {
+        var cancellation = _keywordSearchCancellation;
+        _keywordSearchCancellation = null;
+        cancellation?.Cancel();
     }
 
     private void ShowFolderResults(FolderTreeNode folderNode)
