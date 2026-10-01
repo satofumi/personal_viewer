@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _thumbnailLoadCancellation;
     private CancellationTokenSource? _keywordSearchCancellation;
     private SearchResultItem? _contextMenuTarget;
+    private int _ffmpegThumbnailErrorNotificationShown;
 
     public ProjectInfo? CurrentProject { get; private set; }
 
@@ -860,17 +861,19 @@ public partial class MainWindow : Window
         CancelThumbnailLoading();
         var cancellationSource = new CancellationTokenSource();
         _thumbnailLoadCancellation = cancellationSource;
+        Interlocked.Exchange(ref _ffmpegThumbnailErrorNotificationShown, 0);
+        var allowFfmpegFallback = StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video");
         foreach (var result in results)
         {
-            _ = LoadThumbnailAsync(result, cancellationSource.Token);
+            _ = LoadThumbnailAsync(result, allowFfmpegFallback, cancellationSource.Token);
         }
     }
 
-    private async Task LoadThumbnailAsync(SearchResultItem result, CancellationToken cancellationToken)
+    private async Task LoadThumbnailAsync(SearchResultItem result, bool allowFfmpegFallback, CancellationToken cancellationToken)
     {
         try
         {
-            var thumbnailData = await _thumbnailCache.GetThumbnailAsync(result.File, cancellationToken);
+            var thumbnailData = await _thumbnailCache.GetThumbnailAsync(result.File, allowFfmpegFallback, cancellationToken);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (!cancellationToken.IsCancellationRequested)
@@ -881,6 +884,21 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (FfmpegThumbnailException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (Interlocked.Exchange(ref _ffmpegThumbnailErrorNotificationShown, 1) == 0)
+            {
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        ShowStatusMessage(LocalizationService.Format(
+                            "FfmpegThumbnailFailure",
+                            Path.GetFileName(exception.FilePath)));
+                    }
+                }, DispatcherPriority.Background);
+            }
         }
         catch (Exception)
         {

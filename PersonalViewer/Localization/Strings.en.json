@@ -33,6 +33,7 @@
   "ColumnSize": "Size",
   "EmptyResultsPrompt": "Enter a keyword in the search box or\nselect a folder",
   "NoThumbnail": "No thumbnail",
+  "FfmpegThumbnailFailure": "FFmpeg could not run or create a video thumbnail: {0}",
   "Rescan": "Rescan",
   "FolderUnreadable": "(Unable to load)",
   "StatusReady": "Ready",

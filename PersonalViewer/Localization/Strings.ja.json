@@ -33,6 +33,7 @@
   "ColumnSize": "サイズ",
   "EmptyResultsPrompt": "検索欄にキーワードを入力するか、\nフォルダーを選択してください",
   "NoThumbnail": "サムネイルなし",
+  "FfmpegThumbnailFailure": "FFmpegを実行できないか、動画のサムネイルを作成できませんでした: {0}",
   "Rescan": "再スキャン",
   "FolderUnreadable": "（読み込めません）",
   "StatusReady": "準備完了",

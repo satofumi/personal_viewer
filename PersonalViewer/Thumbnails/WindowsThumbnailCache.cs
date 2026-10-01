@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -22,12 +23,12 @@ public sealed class WindowsThumbnailCache
         "Thumbnails");
     private readonly SemaphoreSlim _generationSemaphore = new(2, 2);
 
-    public async Task<byte[]?> GetThumbnailAsync(IndexedFile file, CancellationToken cancellationToken)
+    public async Task<byte[]?> GetThumbnailAsync(IndexedFile file, bool allowFfmpegFallback, CancellationToken cancellationToken)
     {
         await _generationSemaphore.WaitAsync(cancellationToken);
         try
         {
-            return await Task.Run(() => GetThumbnail(file, cancellationToken), cancellationToken);
+            return await Task.Run(() => GetThumbnail(file, allowFfmpegFallback, cancellationToken), cancellationToken);
         }
         finally
         {
@@ -35,7 +36,7 @@ public sealed class WindowsThumbnailCache
         }
     }
 
-    private byte[]? GetThumbnail(IndexedFile file, CancellationToken cancellationToken)
+    private byte[]? GetThumbnail(IndexedFile file, bool allowFfmpegFallback, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var cachePath = GetCachePath(file);
@@ -52,16 +53,120 @@ public sealed class WindowsThumbnailCache
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var thumbnail = GetWindowsThumbnail(file.Path);
-        if (thumbnail is null)
+        byte[]? windowsThumbnail = null;
+        try
+        {
+            var thumbnail = GetWindowsThumbnail(file.Path);
+            if (thumbnail is not null)
+            {
+                windowsThumbnail = EncodeThumbnail(thumbnail);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception) when (allowFfmpegFallback)
+        {
+            // Use FFmpeg when Windows cannot extract or encode a video thumbnail.
+        }
+
+        if (windowsThumbnail is not null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TrySaveThumbnail(cachePath, windowsThumbnail, cancellationToken);
+            return windowsThumbnail;
+        }
+
+        if (!allowFfmpegFallback)
         {
             return null;
         }
 
-        var encodedThumbnail = EncodeThumbnail(thumbnail);
         cancellationToken.ThrowIfCancellationRequested();
-        TrySaveThumbnail(cachePath, encodedThumbnail, cancellationToken);
-        return encodedThumbnail;
+        var ffmpegThumbnail = GenerateFfmpegThumbnail(file.Path, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        TrySaveThumbnail(cachePath, ffmpegThumbnail, cancellationToken);
+        return ffmpegThumbnail;
+    }
+
+    private static byte[] GenerateFfmpegThumbnail(string filePath, CancellationToken cancellationToken)
+    {
+        var temporaryPath = Path.Combine(
+            Path.GetTempPath(),
+            $"PersonalViewer-{Guid.NewGuid():N}.png");
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-hide_banner");
+            startInfo.ArgumentList.Add("-loglevel");
+            startInfo.ArgumentList.Add("error");
+            startInfo.ArgumentList.Add("-nostdin");
+            startInfo.ArgumentList.Add("-i");
+            startInfo.ArgumentList.Add(filePath);
+            startInfo.ArgumentList.Add("-vf");
+            startInfo.ArgumentList.Add($"thumbnail=100,scale={ThumbnailSize}:{ThumbnailSize}:force_original_aspect_ratio=decrease");
+            startInfo.ArgumentList.Add("-frames:v");
+            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add("-an");
+            startInfo.ArgumentList.Add("-y");
+            startInfo.ArgumentList.Add(temporaryPath);
+
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("FFmpeg did not start.");
+            }
+
+            using var cancellationRegistration = cancellationToken.Register(() => TryKillProcess(process));
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
+            process.WaitForExit();
+            var standardError = standardErrorTask.GetAwaiter().GetResult();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"FFmpeg exited with code {process.ExitCode}: {standardError.Trim()}");
+            }
+
+            return LoadCachedThumbnail(temporaryPath);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (FfmpegThumbnailException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new FfmpegThumbnailException(filePath, exception);
+        }
+        finally
+        {
+            TryDelete(temporaryPath);
+        }
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private string GetCachePath(IndexedFile file)
@@ -202,4 +307,10 @@ public sealed class WindowsThumbnailCache
         ThumbnailOnly = 0x08,
         ScaleUp = 0x100
     }
+}
+
+public sealed class FfmpegThumbnailException(string filePath, Exception innerException)
+    : Exception($"FFmpeg could not create a thumbnail for '{filePath}'.", innerException)
+{
+    public string FilePath { get; } = filePath;
 }
