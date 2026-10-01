@@ -6,6 +6,8 @@ public sealed class AppSettings
 
     public string? LastProjectId { get; set; }
 
+    public string Language { get; set; } = "auto";
+
     public string LastViewMode { get; set; } = "details";
 
     public string ThumbnailSortOrder { get; set; } = "name";

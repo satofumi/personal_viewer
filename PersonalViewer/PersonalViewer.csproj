@@ -12,9 +12,22 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>app-icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Localization/Strings.ja.json"
+                      LogicalName="PersonalViewer.Localization.Strings.ja.json" WithCulture="false" />
+    <EmbeddedResource Include="Localization/Strings.en.json"
+                      LogicalName="PersonalViewer.Localization.Strings.en.json" WithCulture="false" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="YamlDotNet" Version="16.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="app-icon.ico" />
+    <Resource Include="app-icon.ico" />
   </ItemGroup>
 </Project>

@@ -1,4 +1,5 @@
 using System.IO;
+using PersonalViewer.Localization;
 
 namespace PersonalViewer.Projects;
 
@@ -30,7 +31,7 @@ public sealed class ProjectFileIndexUpdater
             .ToArray();
         if (scanRoots.Length == 0)
         {
-            throw new ProjectFileIndexException("スキャン範囲のフォルダーがありません。");
+            throw new ProjectFileIndexException(LocalizationService.GetString("ScanRootsMissing"));
         }
 
         var incompleteScanPaths = (incompletePaths ?? [])
@@ -46,7 +47,7 @@ public sealed class ProjectFileIndexUpdater
         {
             if (scannedFile is null || string.IsNullOrWhiteSpace(scannedFile.Path) || !Path.IsPathFullyQualified(scannedFile.Path))
             {
-                throw new ProjectFileIndexException("スキャン結果に正しくない絶対パスがあります。");
+                throw new ProjectFileIndexException(LocalizationService.GetString("ScanResultPathInvalid"));
             }
 
             var fullPath = Path.GetFullPath(scannedFile.Path);

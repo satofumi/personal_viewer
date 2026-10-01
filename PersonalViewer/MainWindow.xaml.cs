@@ -10,6 +10,7 @@ using System.Diagnostics;
 using Microsoft.Win32;
 using System.ComponentModel;
 using PersonalViewer.Configuration;
+using PersonalViewer.Localization;
 using PersonalViewer.Projects;
 using PersonalViewer.Thumbnails;
 
@@ -17,7 +18,7 @@ namespace PersonalViewer;
 
 public partial class MainWindow : Window
 {
-    private const string ProjectSelectorPlaceholder = "プロジェクトを選択";
+    private static string ProjectSelectorPlaceholder => LocalizationService.GetString("SelectProject");
     private static readonly object LazyChildPlaceholder = new();
     private static readonly TimeSpan StatusMessageDuration = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan KeywordSearchDebounceDuration = TimeSpan.FromMilliseconds(180);
@@ -70,7 +71,7 @@ public partial class MainWindow : Window
         };
         Closing += MainWindow_Closing;
         Loaded += MainWindow_Loaded;
-        ShowStatusMessage("準備完了");
+        ShowStatusMessage(LocalizationService.GetString("StatusReady"));
         LoadProjectsAndRestoreSelection();
     }
 
@@ -132,7 +133,7 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                $"ウィンドウ位置とサイズを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("WindowBoundsSaveErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -166,7 +167,7 @@ public partial class MainWindow : Window
             _projects = [];
             SetProjectItems(null);
             MessageBox.Show(
-                $"プロジェクト一覧を読み込めませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("ProjectListLoadErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -182,12 +183,12 @@ public partial class MainWindow : Window
         SetProjectItems(lastProject);
         if (lastProject is not null)
         {
-            ShowStatusMessage($"前回のプロジェクト「{lastProject.Name}」を開きました。");
+            ShowStatusMessage(LocalizationService.Format("LastProjectOpened", lastProject.Name));
         }
         else if (lastProjectId is not null)
         {
             SaveLastProjectId(null);
-            ShowStatusMessage("前回選択されたプロジェクトが見つかりません。");
+            ShowStatusMessage(LocalizationService.GetString("LastProjectMissing"));
         }
     }
 
@@ -241,7 +242,7 @@ public partial class MainWindow : Window
         SaveLastProjectId(CurrentProject?.ProjectId);
         if (CurrentProject is not null)
         {
-            ShowStatusMessage($"プロジェクト「{CurrentProject.Name}」を選択しました。");
+            ShowStatusMessage(LocalizationService.Format("ProjectSelected", CurrentProject.Name));
         }
     }
 
@@ -255,9 +256,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        foreach (var folder in CurrentProject.Folders)
+        var rootItems = CurrentProject.Folders
+            .Select(folder => CreateFolderTreeItem(folder, folder))
+            .ToArray();
+        foreach (var rootItem in rootItems)
         {
-            FolderTreeView.Items.Add(CreateFolderTreeItem(folder, folder));
+            FolderTreeView.Items.Add(rootItem);
+        }
+
+        if (rootItems.Length == 1 && rootItems[0].HasItems)
+        {
+            rootItems[0].IsExpanded = true;
         }
     }
 
@@ -278,7 +287,7 @@ public partial class MainWindow : Window
         };
         var rescanMenuItem = new MenuItem
         {
-            Header = "再スキャン",
+            Header = LocalizationService.GetString("Rescan"),
             Tag = folderNode
         };
         rescanMenuItem.Click += RescanFolderMenuItem_Click;
@@ -342,7 +351,7 @@ public partial class MainWindow : Window
         {
             case SearchMode.Empty:
                 CancelKeywordSearch();
-                SetSearchResults([], "検索欄にキーワードを入力するか、フォルダーを選択してください");
+                SetSearchResults([], LocalizationService.GetString("EmptyResultsPrompt"));
                 break;
             case SearchMode.Folder when FolderTreeView.SelectedItem is TreeViewItem { Tag: FolderTreeNode folderNode }:
                 CancelKeywordSearch();
@@ -359,14 +368,14 @@ public partial class MainWindow : Window
         CancelKeywordSearch();
         if (project is null)
         {
-            SetSearchResults([], "プロジェクトを選択してください");
+            SetSearchResults([], LocalizationService.GetString("SelectProjectMessage"));
             return;
         }
 
         var cancellation = new CancellationTokenSource();
         _keywordSearchCancellation = cancellation;
         var cancellationToken = cancellation.Token;
-        SetSearchResults([], "検索しています...");
+        SetSearchResults([], LocalizationService.GetString("Searching"));
 
         try
         {
@@ -380,7 +389,7 @@ public partial class MainWindow : Window
 
             if (IsCurrentKeywordSearch(query, cancellation))
             {
-                SetSearchResults(results, "一致するファイルはありません");
+                SetSearchResults(results, LocalizationService.GetString("NoMatchingFiles"));
             }
         }
         catch (OperationCanceledException)
@@ -390,10 +399,10 @@ public partial class MainWindow : Window
         {
             if (IsCurrentKeywordSearch(query, cancellation))
             {
-                SetSearchResults([], "ファイル一覧を読み込めませんでした");
+                SetSearchResults([], LocalizationService.GetString("FileListLoadErrorStatus"));
                 MessageBox.Show(
                     this,
-                    $"ファイル一覧を読み込めませんでした。{Environment.NewLine}{exception.Message}",
+                    LocalizationService.Format("FileListLoadErrorDetails", exception.Message),
                     "Personal Viewer",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
@@ -462,7 +471,7 @@ public partial class MainWindow : Window
     {
         if (CurrentProject is null)
         {
-            SetSearchResults([], "プロジェクトを選択してください");
+            SetSearchResults([], LocalizationService.GetString("SelectProjectMessage"));
             return;
         }
 
@@ -474,14 +483,14 @@ public partial class MainWindow : Window
                 .OrderBy(file => Path.GetFileName(file.Path), StringComparer.OrdinalIgnoreCase)
                 .Select(file => new SearchResultItem(file, Path.GetFileName(file.Path)))
                 .ToArray();
-            SetSearchResults(results, $"フォルダー「{Path.GetFileName(folderPath)}」に表示できるファイルはありません");
+            SetSearchResults(results, LocalizationService.Format("FolderNoFiles", Path.GetFileName(folderPath)));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
         {
-            SetSearchResults([], "ファイル一覧を読み込めませんでした");
+            SetSearchResults([], LocalizationService.GetString("FileListLoadErrorStatus"));
             MessageBox.Show(
                 this,
-                $"ファイル一覧を読み込めませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("FileListLoadErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -493,7 +502,8 @@ public partial class MainWindow : Window
         var sortedResults = SortResultsForCurrentView(results);
         ResultsListView.SelectedItems.Clear();
         ResultsListView.ItemsSource = sortedResults;
-        ResultCountText.Text = $"{results.Count} 件";
+        var resultCountKey = results.Count == 1 ? "ResultCountOne" : "ResultCountMany";
+        ResultCountText.Text = LocalizationService.Format(resultCountKey, results.Count);
         ResultEmptyText.Text = emptyMessage;
         ResultEmptyText.Visibility = results.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (_showThumbnailView)
@@ -519,7 +529,7 @@ public partial class MainWindow : Window
         {
             SelectedTagsItemsControl.ItemsSource = null;
             SelectedTagsItemsControl.Visibility = Visibility.Collapsed;
-            TagPlaceholderText.Text = "ファイルを選択するとタグがここに表示されます";
+            TagPlaceholderText.Text = LocalizationService.GetString("SelectFilesTagsPlaceholder");
             TagPlaceholderText.Visibility = Visibility.Visible;
             return;
         }
@@ -533,8 +543,8 @@ public partial class MainWindow : Window
         SelectedTagsItemsControl.ItemsSource = tagItems;
         SelectedTagsItemsControl.Visibility = tagItems.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         TagPlaceholderText.Text = selectedFiles.Length == 1
-            ? "タグはありません"
-            : "選択したファイルにタグはありません";
+            ? LocalizationService.GetString("NoTags")
+            : LocalizationService.GetString("NoTagsForSelectedFiles");
         TagPlaceholderText.Visibility = tagItems.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -616,11 +626,11 @@ public partial class MainWindow : Window
             .ToArray();
         if (updates.Length == 0)
         {
-            ShowStatusMessage("選択中のファイルにはすべてこのタグが追加されています。");
+            ShowStatusMessage(LocalizationService.GetString("TagAlreadyAdded"));
             return;
         }
 
-        if (SaveTagsForFiles(updates, "タグを追加しました。"))
+        if (SaveTagsForFiles(updates, LocalizationService.GetString("TagAdded")))
         {
             SetTagInputVisible(visible: false);
         }
@@ -647,7 +657,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        SaveTagsForFiles(updates, "タグを削除しました。");
+        SaveTagsForFiles(updates, LocalizationService.GetString("TagRemoved"));
     }
 
     private SearchResultItem[] GetSelectedResultFiles()
@@ -691,7 +701,7 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                $"タグを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("TagSaveErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -705,7 +715,7 @@ public partial class MainWindow : Window
         NewTagTextBox.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         AddTagButton.Content = visible ? "✓" : "+";
         AddTagButton.FontSize = visible ? 16 : 19;
-        AddTagButton.ToolTip = visible ? "入力したタグを追加" : "タグを追加";
+        AddTagButton.ToolTip = visible ? LocalizationService.GetString("AddEnteredTag") : LocalizationService.GetString("AddTag");
 
         if (visible)
         {
@@ -742,7 +752,7 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SettingsFileException)
         {
             MessageBox.Show(
-                $"表示モードを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("ViewModeSaveErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -761,7 +771,7 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SettingsFileException)
         {
             MessageBox.Show(
-                $"サムネイルの並び順を保存できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("ThumbnailSortSaveErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -937,7 +947,13 @@ public partial class MainWindow : Window
 
     private void UpdateSortHeaders()
     {
-        var labels = new[] { "ファイル名", "更新日時", "種類", "サイズ" };
+        var labels = new[]
+        {
+            LocalizationService.GetString("ColumnFileName"),
+            LocalizationService.GetString("ColumnLastModified"),
+            LocalizationService.GetString("ColumnType"),
+            LocalizationService.GetString("ColumnSize")
+        };
         for (var index = 0; index < labels.Length; index++)
         {
             var indicator = index == (int)_sortColumn
@@ -969,7 +985,7 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                $"ファイルを開けませんでした。{Environment.NewLine}{result.File.Path}{Environment.NewLine}{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("FileOpenErrorDetails", result.File.Path, exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1017,7 +1033,7 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                $"ファイルが見つかりません。再スキャンしてください。{Environment.NewLine}{result.File.Path}",
+                LocalizationService.Format("FileNotFoundRescanDetails", result.File.Path),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1037,7 +1053,7 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                $"エクスプローラーでファイルを表示できませんでした。{Environment.NewLine}{result.File.Path}{Environment.NewLine}{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("ExplorerOpenErrorDetails", result.File.Path, exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1182,10 +1198,10 @@ public partial class MainWindow : Window
         {
             item.Items.Add(new TreeViewItem
             {
-                Header = "（読み込めません）",
+                Header = LocalizationService.GetString("FolderUnreadable"),
                 IsEnabled = false
             });
-            ShowStatusMessage($"サブフォルダーを読み込めませんでした: {Path.GetFileName(folderNode.FullPath)}");
+            ShowStatusMessage(LocalizationService.Format("SubfolderLoadError", Path.GetFileName(folderNode.FullPath)));
         }
     }
 
@@ -1200,7 +1216,7 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SettingsFileException)
         {
             MessageBox.Show(
-                $"前回選択したプロジェクトを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("SaveLastProjectErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1214,11 +1230,11 @@ public partial class MainWindow : Window
 
     private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        var version = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "不明";
+        var version = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? LocalizationService.GetString("VersionUnknown");
         MessageBox.Show(
             this,
-            $"Personal Viewer{Environment.NewLine}Version {version}",
-            "このアプリケーションについて",
+            LocalizationService.Format("AboutMessage", version),
+            LocalizationService.GetString("AboutTitle"),
             MessageBoxButton.OK,
             MessageBoxImage.Information);
     }
@@ -1249,7 +1265,7 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ProjectDataException or SecurityException)
         {
             MessageBox.Show(
-                $"プロジェクトを作成できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("ProjectCreateErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1263,9 +1279,9 @@ public partial class MainWindow : Window
             savedProject,
             app.Settings,
             folderPath: null,
-            "プロジェクトのフォルダーをスキャンしています...",
-            "プロジェクトを作成し、スキャンしました。",
-            "プロジェクトは作成しましたが、初回スキャンに失敗しました。");
+            LocalizationService.GetString("ProjectScanProgress"),
+            LocalizationService.GetString("ProjectScanComplete"),
+            LocalizationService.GetString("ProjectScanFailure"));
     }
 
     private async void AddFolderMenuItem_Click(object sender, RoutedEventArgs e)
@@ -1277,14 +1293,14 @@ public partial class MainWindow : Window
 
         if (CurrentProject is null)
         {
-            ShowStatusMessage("先にプロジェクトを選択してください。");
+            ShowStatusMessage(LocalizationService.GetString("SelectProjectFirst"));
             return;
         }
 
         var project = CurrentProject;
         var dialog = new OpenFolderDialog
         {
-            Title = "追加するフォルダーを選択",
+            Title = LocalizationService.GetString("AddFolderDialogTitle"),
             Multiselect = false
         };
         if (dialog.ShowDialog(this) != true)
@@ -1295,14 +1311,14 @@ public partial class MainWindow : Window
         var folderPath = NormalizeFolderPath(dialog.FolderName);
         if (!Directory.Exists(folderPath))
         {
-            ShowStatusMessage("選択したフォルダーが見つかりません。");
+            ShowStatusMessage(LocalizationService.GetString("FolderMissing"));
             return;
         }
 
         if (project.Folders.Any(folder =>
                 StringComparer.OrdinalIgnoreCase.Equals(NormalizeFolderPath(folder), folderPath)))
         {
-            ShowStatusMessage("そのフォルダーは既にプロジェクトに登録されています。");
+            ShowStatusMessage(LocalizationService.GetString("FolderAlreadyRegistered"));
             return;
         }
 
@@ -1322,7 +1338,7 @@ public partial class MainWindow : Window
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ProjectDataException or SecurityException)
         {
             MessageBox.Show(
-                $"フォルダーをプロジェクトに追加できませんでした。{Environment.NewLine}{exception.Message}",
+                LocalizationService.Format("AddFolderErrorDetails", exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1339,9 +1355,9 @@ public partial class MainWindow : Window
             savedProject,
             ((App)Application.Current).Settings,
             folderPath,
-            "追加したフォルダーをスキャンしています...",
-            "フォルダーを追加し、スキャンしました。",
-            "フォルダーは追加しましたが、そのフォルダーのスキャンに失敗しました。");
+            LocalizationService.GetString("AddFolderScanProgress"),
+            LocalizationService.GetString("AddFolderScanComplete"),
+            LocalizationService.GetString("AddFolderScanFailure"));
     }
 
     private async void RescanFolderMenuItem_Click(object sender, RoutedEventArgs e)
@@ -1368,9 +1384,9 @@ public partial class MainWindow : Window
             project,
             app.Settings,
             folderNode.FullPath,
-            $"フォルダー「{folderName}」を再スキャンしています...",
-            $"フォルダー「{folderName}」を再スキャンしました。",
-            $"フォルダー「{folderName}」の再スキャンに失敗しました。");
+            LocalizationService.Format("RescanProgress", folderName),
+            LocalizationService.Format("RescanComplete", folderName),
+            LocalizationService.Format("RescanFailure", folderName));
     }
 
     private void UpsertProject(ProjectInfo project)
@@ -1414,7 +1430,7 @@ public partial class MainWindow : Window
                     .Count();
                 var message = issueCount == 0
                     ? completionMessage
-                    : $"{completionMessage} 一部を読み込めませんでした（{issueCount} 件）。";
+                    : LocalizationService.Format("ScanPartialSuccess", completionMessage, issueCount);
                 ShowStatusMessage(message);
             }
         }
@@ -1424,11 +1440,11 @@ public partial class MainWindow : Window
             {
                 MessageBox.Show(
                     this,
-                    $"{failureMessage}{Environment.NewLine}{exception.Message}",
+                    LocalizationService.Format("ScanFailureDetails", failureMessage, exception.Message),
                     "Personal Viewer",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-                ShowStatusMessage("スキャンに失敗しました。");
+                ShowStatusMessage(LocalizationService.GetString("ScanFailureStatus"));
             }
         }
         finally

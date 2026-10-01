@@ -1,4 +1,5 @@
 ﻿using System.IO;
+using PersonalViewer.Localization;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -11,6 +12,7 @@ namespace PersonalViewer.Configuration;
 public static class SettingsStore
 {
     private const string DefaultSettingsYaml = """
+    language: auto
     media_types:
       - name: Video
         extensions:
@@ -65,12 +67,12 @@ public static class SettingsStore
         }
         catch (YamlException exception)
         {
-            throw new SettingsFileException("settings.yaml の YAML を解析できません。", exception);
+            throw new SettingsFileException(LocalizationService.GetString("SettingsYamlParse"), exception);
         }
 
         if (settings is null)
         {
-            throw new SettingsFileException("settings.yaml に設定がありません。");
+            throw new SettingsFileException(LocalizationService.GetString("SettingsEmpty"));
         }
 
         ValidateAndNormalize(settings);
@@ -84,7 +86,7 @@ public static class SettingsStore
         {
             if (!Guid.TryParse(projectId, out var parsedProjectId))
             {
-                throw new ArgumentException("プロジェクト ID が正しくありません。", nameof(projectId));
+                throw new ArgumentException(LocalizationService.GetString("InvalidProjectId"), nameof(projectId));
             }
 
             normalizedProjectId = parsedProjectId.ToString("N");
@@ -98,7 +100,7 @@ public static class SettingsStore
         var normalizedViewMode = viewMode?.Trim().ToLowerInvariant();
         if (normalizedViewMode is not ("details" or "thumbnails"))
         {
-            throw new ArgumentException("表示モードは details または thumbnails にしてください。", nameof(viewMode));
+            throw new ArgumentException(LocalizationService.GetString("InvalidViewMode"), nameof(viewMode));
         }
 
         WriteScalarSetting("last_view_mode", normalizedViewMode);
@@ -109,7 +111,7 @@ public static class SettingsStore
         var normalizedSortOrder = sortOrder?.Trim().ToLowerInvariant();
         if (normalizedSortOrder is not ("name" or "last_modified"))
         {
-            throw new ArgumentException("サムネイルの並び順は name または last_modified にしてください。", nameof(sortOrder));
+            throw new ArgumentException(LocalizationService.GetString("InvalidThumbnailSortOrder"), nameof(sortOrder));
         }
 
         WriteScalarSetting("thumbnail_sort_order", normalizedSortOrder);
@@ -124,7 +126,7 @@ public static class SettingsStore
             || width <= 0
             || height <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(width), "ウィンドウ位置とサイズが正しくありません。");
+            throw new ArgumentOutOfRangeException(nameof(width), LocalizationService.GetString("InvalidWindowBounds"));
         }
 
         WriteScalarSettings(new Dictionary<string, string>(StringComparer.Ordinal)
@@ -154,14 +156,14 @@ public static class SettingsStore
             var currentSettings = Deserializer.Deserialize<AppSettings>(yaml);
             if (currentSettings is null)
             {
-                throw new SettingsFileException("settings.yaml に設定がありません。");
+                throw new SettingsFileException(LocalizationService.GetString("SettingsEmpty"));
             }
 
             ValidateAndNormalize(currentSettings);
         }
         catch (YamlException exception)
         {
-            throw new SettingsFileException("settings.yaml の YAML を解析できません。", exception);
+            throw new SettingsFileException(LocalizationService.GetString("SettingsYamlParse"), exception);
         }
 
         var newline = yaml.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
@@ -173,7 +175,7 @@ public static class SettingsStore
                 $@"(?m)^(?:{escapedPropertyName}|""{escapedPropertyName}""|'{escapedPropertyName}')[ \t]*:[^\r\n]*");
             if (propertyMatches.Count > 1)
             {
-                throw new SettingsFileException($"settings.yaml に {propertyName} が重複しています。");
+                throw new SettingsFileException(LocalizationService.Format("DuplicateSetting", propertyName));
             }
 
             if (propertyMatches.Count == 1)
@@ -201,6 +203,9 @@ public static class SettingsStore
 
     private static void ValidateAndNormalize(AppSettings settings)
     {
+        var language = settings.Language?.Trim().ToLowerInvariant();
+        settings.Language = language is "ja" or "en" ? language : "auto";
+
         if (string.IsNullOrWhiteSpace(settings.LastProjectId) || !Guid.TryParse(settings.LastProjectId, out var lastProjectId))
         {
             settings.LastProjectId = null;
@@ -228,7 +233,7 @@ public static class SettingsStore
 
         if (settings.MediaTypes is null || settings.MediaTypes.Count == 0)
         {
-            throw new SettingsFileException("settings.yaml に media_types を1件以上定義してください。");
+            throw new SettingsFileException(LocalizationService.GetString("MediaTypesRequired"));
         }
 
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -236,18 +241,18 @@ public static class SettingsStore
         {
             if (mediaType is null || string.IsNullOrWhiteSpace(mediaType.Name))
             {
-                throw new SettingsFileException("各メディア種別には name が必要です。");
+                throw new SettingsFileException(LocalizationService.GetString("MediaTypeNameRequired"));
             }
 
             mediaType.Name = mediaType.Name.Trim();
             if (!names.Add(mediaType.Name))
             {
-                throw new SettingsFileException($"メディア種別名が重複しています: {mediaType.Name}");
+                throw new SettingsFileException(LocalizationService.Format("DuplicateMediaType", mediaType.Name));
             }
 
             if (mediaType.Extensions is null || mediaType.Extensions.Count == 0)
             {
-                throw new SettingsFileException($"メディア種別 {mediaType.Name} に extensions を1件以上定義してください。");
+                throw new SettingsFileException(LocalizationService.Format("ExtensionsRequired", mediaType.Name));
             }
 
             var normalizedExtensions = new List<string>();
@@ -255,13 +260,13 @@ public static class SettingsStore
             {
                 if (string.IsNullOrWhiteSpace(configuredExtension))
                 {
-                    throw new SettingsFileException($"メディア種別 {mediaType.Name} に空の拡張子があります。");
+                    throw new SettingsFileException(LocalizationService.Format("EmptyExtension", mediaType.Name));
                 }
 
                 var extension = configuredExtension.Trim().ToLowerInvariant();
                 if (extension.Length < 2 || extension[0] != '.' || extension != Path.GetFileName(extension) || extension.Contains('*') || extension.Contains('?'))
                 {
-                    throw new SettingsFileException($"拡張子は .mp4 のようにドットから始まる値にしてください: {configuredExtension}");
+                    throw new SettingsFileException(LocalizationService.Format("InvalidExtension", configuredExtension));
                 }
 
                 if (!normalizedExtensions.Contains(extension, StringComparer.Ordinal))

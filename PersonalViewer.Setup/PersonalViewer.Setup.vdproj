@@ -102,6 +102,17 @@
     }
     "Folder"
     {
+      "{1525181F-901A-416C-8A58-119130FE478E}:_0504F721EA2347C9AA9615BB20CB5BEA"
+      {
+        "Name" = "8:#1916"
+        "AlwaysCreate" = "11:FALSE"
+        "Condition" = "8:"
+        "Transitive" = "11:FALSE"
+        "Property" = "8:DesktopFolder"
+        "Folders"
+        {
+        }
+      }
       "{3C67513D-01DD-4637-8A68-80971EB9504F}:_APP_FOLDER"
       {
         "DefaultLocation" = "8:[ProgramFiles64Folder][ProductName]"
@@ -200,6 +211,20 @@
     }
     "Shortcut"
     {
+      "{970C0BB2-C7D0-45D7-ABFA-7EC378858BC0}:_D4CB8547377346A48863B4C0B6284670"
+      {
+        "Name" = "8:Personal Viewer"
+        "Arguments" = "8:"
+        "Description" = "8:"
+        "ShowCmd" = "3:1"
+        "IconIndex" = "3:0"
+        "Transitive" = "11:FALSE"
+        "Target" = "8:_APP_OUTPUT"
+        "Folder" = "8:_0504F721EA2347C9AA9615BB20CB5BEA"
+        "WorkingFolder" = "8:_APP_FOLDER"
+        "Icon" = "8:"
+        "Feature" = "8:"
+      }
     }
     "UserInterface"
     {

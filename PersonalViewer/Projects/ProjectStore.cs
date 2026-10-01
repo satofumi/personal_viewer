@@ -1,4 +1,5 @@
 using System.IO;
+using PersonalViewer.Localization;
 using System.Text;
 using PersonalViewer.Configuration;
 using YamlDotNet.Core;
@@ -43,7 +44,7 @@ public sealed class ProjectStore
         var projectFilePath = Path.Combine(ProjectsDirectory, normalizedId, "project.yaml");
         if (!File.Exists(projectFilePath))
         {
-            throw new FileNotFoundException("プロジェクト情報が見つかりません。", projectFilePath);
+            throw new FileNotFoundException(LocalizationService.GetString("ProjectInfoNotFound"), projectFilePath);
         }
 
         return ReadProject(projectFilePath, normalizedId);
@@ -85,18 +86,18 @@ public sealed class ProjectStore
         }
         catch (YamlException exception)
         {
-            throw new ProjectDataException($"プロジェクト情報の YAML を解析できません: {projectFilePath}", exception);
+            throw new ProjectDataException(LocalizationService.Format("ProjectYamlParse", projectFilePath), exception);
         }
 
         if (project is null)
         {
-            throw new ProjectDataException($"プロジェクト情報が空です: {projectFilePath}");
+            throw new ProjectDataException(LocalizationService.Format("ProjectInfoEmpty", projectFilePath));
         }
 
         var normalizedProject = Normalize(project, createIdIfMissing: false);
         if (!StringComparer.OrdinalIgnoreCase.Equals(normalizedProject.ProjectId, expectedProjectId))
         {
-            throw new ProjectDataException($"プロジェクト ID が保存場所と一致しません: {projectFilePath}");
+            throw new ProjectDataException(LocalizationService.Format("ProjectIdPathMismatch", projectFilePath));
         }
 
         return normalizedProject;
@@ -115,22 +116,22 @@ public sealed class ProjectStore
         }
         else
         {
-            throw new ProjectDataException("プロジェクト ID が正しくありません。");
+            throw new ProjectDataException(LocalizationService.GetString("InvalidProjectId"));
         }
 
         if (string.IsNullOrWhiteSpace(project.Name))
         {
-            throw new ProjectDataException("プロジェクト名を指定してください。");
+            throw new ProjectDataException(LocalizationService.GetString("ProjectNameRequiredError"));
         }
 
         if (string.IsNullOrWhiteSpace(project.MediaType))
         {
-            throw new ProjectDataException("メディア種別を指定してください。");
+            throw new ProjectDataException(LocalizationService.GetString("MediaTypeRequiredError"));
         }
 
         if (project.Folders is null || project.Folders.Count == 0)
         {
-            throw new ProjectDataException("プロジェクトには登録フォルダーが最低1つ必要です。");
+            throw new ProjectDataException(LocalizationService.GetString("ProjectFolderRequired"));
         }
 
         var folders = new List<string>();
@@ -138,7 +139,7 @@ public sealed class ProjectStore
         {
             if (string.IsNullOrWhiteSpace(folder) || !Path.IsPathFullyQualified(folder))
             {
-                throw new ProjectDataException("登録フォルダーには絶対パスを指定してください。");
+                throw new ProjectDataException(LocalizationService.GetString("RegisteredFolderAbsoluteRequired"));
             }
 
             folders.Add(Path.GetFullPath(folder));
@@ -157,7 +158,7 @@ public sealed class ProjectStore
     {
         if (!Guid.TryParse(projectId, out var parsedProjectId))
         {
-            throw new ArgumentException("プロジェクト ID が正しくありません。", nameof(projectId));
+            throw new ArgumentException(LocalizationService.GetString("InvalidProjectId"), nameof(projectId));
         }
 
         return parsedProjectId.ToString("N");

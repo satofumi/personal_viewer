@@ -1,7 +1,8 @@
 <Window x:Class="PersonalViewer.Projects.NewProjectWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="新規プロジェクト"
+        xmlns:loc="clr-namespace:PersonalViewer.Localization"
+        Title="{loc:Loc NewProjectTitle}"
         Width="540"
         Height="420"
         ResizeMode="NoResize"
@@ -24,10 +25,10 @@
                    FontSize="19"
                    FontWeight="SemiBold"
                    Foreground="#303844"
-                   Text="新規プロジェクト" />
+                   Text="{loc:Loc NewProjectTitle}" />
 
         <StackPanel Grid.Row="1" Margin="0,0,0,16">
-            <TextBlock Foreground="#46505D" Text="プロジェクト名" />
+            <TextBlock Foreground="#46505D" Text="{loc:Loc ProjectName}" />
             <TextBox x:Name="ProjectNameTextBox"
                      Height="34"
                      Margin="0,6,0,0"
@@ -36,17 +37,17 @@
         </StackPanel>
 
         <StackPanel Grid.Row="2" Margin="0,0,0,16">
-            <TextBlock Foreground="#46505D" Text="メディア種別" />
+            <TextBlock Foreground="#46505D" Text="{loc:Loc MediaType}" />
             <ComboBox x:Name="MediaTypeComboBox"
                       Height="34"
                       Margin="0,6,0,0"
                       Padding="8,4"
-                      DisplayMemberPath="Name"
+                      DisplayMemberPath="DisplayName"
                       VerticalContentAlignment="Center" />
         </StackPanel>
 
         <StackPanel Grid.Row="3" Margin="0,0,0,8">
-            <TextBlock Foreground="#46505D" Text="登録フォルダー" />
+            <TextBlock Foreground="#46505D" Text="{loc:Loc RegisteredFolder}" />
             <Grid Margin="0,6,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -63,7 +64,7 @@
                         Height="34"
                         Margin="8,0,0,0"
                         Padding="10,0"
-                        Content="参照..."
+                        Content="{loc:Loc Browse}"
                         Click="BrowseFolder_Click" />
             </Grid>
         </StackPanel>
@@ -82,11 +83,11 @@
             <Button Width="88"
                     Height="34"
                     Margin="0,0,8,0"
-                    Content="キャンセル"
+                    Content="{loc:Loc Cancel}"
                     IsCancel="True" />
             <Button Width="104"
                     Height="34"
-                    Content="作成"
+                    Content="{loc:Loc Create}"
                     IsDefault="True"
                     Click="CreateProject_Click" />
         </StackPanel>

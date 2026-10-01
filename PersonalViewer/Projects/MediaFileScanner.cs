@@ -1,4 +1,5 @@
 using System.IO;
+using PersonalViewer.Localization;
 using System.Security;
 using PersonalViewer.Configuration;
 
@@ -30,17 +31,17 @@ public sealed class MediaFileScanner
             && StringComparer.OrdinalIgnoreCase.Equals(candidate.Name, project.MediaType));
         if (mediaType is null)
         {
-            throw new ProjectFileIndexException($"設定にメディア種別がありません: {project.MediaType}");
+            throw new ProjectFileIndexException(LocalizationService.Format("MediaTypeNotConfigured", project.MediaType));
         }
 
         if (mediaType.Extensions is null || mediaType.Extensions.Count == 0)
         {
-            throw new ProjectFileIndexException($"メディア種別 {mediaType.Name} に拡張子が設定されていません。");
+            throw new ProjectFileIndexException(LocalizationService.Format("MediaExtensionsNotConfigured", mediaType.Name));
         }
 
         if (project.Folders is null || project.Folders.Count == 0)
         {
-            throw new ProjectFileIndexException("プロジェクトに登録フォルダーがありません。");
+            throw new ProjectFileIndexException(LocalizationService.GetString("ProjectFolderMissing"));
         }
 
         var allowedExtensions = new HashSet<string>(
@@ -58,13 +59,13 @@ public sealed class MediaFileScanner
         {
             if (string.IsNullOrWhiteSpace(folder) || !System.IO.Path.IsPathFullyQualified(folder))
             {
-                throw new ProjectFileIndexException("登録フォルダーには絶対パスが必要です。");
+                throw new ProjectFileIndexException(LocalizationService.GetString("ScanFolderAbsoluteRequired"));
             }
 
             var rootPath = System.IO.Path.GetFullPath(folder);
             if (!Directory.Exists(rootPath))
             {
-                RecordPartialFailure(rootPath, new DirectoryNotFoundException($"スキャン対象フォルダーが見つかりません: {rootPath}"));
+                RecordPartialFailure(rootPath, new DirectoryNotFoundException(LocalizationService.Format("ScanFolderMissing", rootPath)));
                 incompletePaths.Add(rootPath);
                 continue;
             }
@@ -74,7 +75,7 @@ public sealed class MediaFileScanner
 
         if (successfulEnumerationCount == 0 && firstEnumerationException is not null)
         {
-            throw new IOException($"スキャン対象を読み取れませんでした: {firstEnumerationException.Message}", firstEnumerationException);
+            throw new IOException(LocalizationService.Format("ScanTargetUnreadable", firstEnumerationException.Message), firstEnumerationException);
         }
 
         return new MediaFileScanResult(
@@ -136,7 +137,7 @@ public sealed class MediaFileScanner
                 fileInfo.Refresh();
                 if (!fileInfo.Exists)
                 {
-                    RecordPartialFailure(fullPath, new FileNotFoundException("列挙後にファイルが見つかりませんでした。", fullPath));
+                    RecordPartialFailure(fullPath, new FileNotFoundException(LocalizationService.GetString("FileDisappeared"), fullPath));
                     return;
                 }
 

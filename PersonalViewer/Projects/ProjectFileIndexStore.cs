@@ -1,4 +1,5 @@
 using System.IO;
+using PersonalViewer.Localization;
 using System.Text;
 using PersonalViewer.Configuration;
 using YamlDotNet.Core;
@@ -34,12 +35,12 @@ public sealed class ProjectFileIndexStore
         }
         catch (YamlException exception)
         {
-            throw new ProjectFileIndexException($"ファイル索引の YAML を解析できません: {indexPath}", exception);
+            throw new ProjectFileIndexException(LocalizationService.Format("IndexYamlParse", indexPath), exception);
         }
 
         if (index is null)
         {
-            throw new ProjectFileIndexException($"ファイル索引が空です: {indexPath}");
+            throw new ProjectFileIndexException(LocalizationService.Format("IndexEmpty", indexPath));
         }
 
         return Normalize(index.Files, indexPath);
@@ -97,7 +98,7 @@ public sealed class ProjectFileIndexStore
         var missingPath = normalizedTagsByPath.Keys.FirstOrDefault(path => !filesByPath.ContainsKey(path));
         if (missingPath is not null)
         {
-            throw new ProjectFileIndexException($"タグの保存対象がファイル索引にありません: {missingPath}");
+            throw new ProjectFileIndexException(LocalizationService.Format("TagTargetMissing", missingPath));
         }
 
         foreach (var (path, tags) in normalizedTagsByPath)
@@ -113,7 +114,7 @@ public sealed class ProjectFileIndexStore
         ArgumentNullException.ThrowIfNull(project);
         if (!Guid.TryParse(project.ProjectId, out var parsedProjectId))
         {
-            throw new ProjectFileIndexException("プロジェクト ID が正しくありません。");
+            throw new ProjectFileIndexException(LocalizationService.GetString("InvalidProjectId"));
         }
 
         return Path.Combine(
@@ -127,7 +128,7 @@ public sealed class ProjectFileIndexStore
     {
         if (string.IsNullOrWhiteSpace(filePath) || !Path.IsPathFullyQualified(filePath))
         {
-            throw new ProjectFileIndexException("タグの対象ファイルには絶対パスが必要です。");
+            throw new ProjectFileIndexException(LocalizationService.GetString("TagFileAbsoluteRequired"));
         }
 
         return Path.GetFullPath(filePath);
@@ -137,7 +138,7 @@ public sealed class ProjectFileIndexStore
     {
         if (files is null)
         {
-            throw new ProjectFileIndexException($"ファイル索引に files がありません: {indexPath}");
+            throw new ProjectFileIndexException(LocalizationService.Format("IndexFilesMissing", indexPath));
         }
 
         var uniqueFiles = new Dictionary<string, IndexedFile>(StringComparer.OrdinalIgnoreCase);
@@ -145,13 +146,13 @@ public sealed class ProjectFileIndexStore
         {
             if (file is null || string.IsNullOrWhiteSpace(file.Path) || !Path.IsPathFullyQualified(file.Path))
             {
-                throw new ProjectFileIndexException($"ファイル索引に正しくない絶対パスがあります: {indexPath}");
+                throw new ProjectFileIndexException(LocalizationService.Format("IndexPathInvalid", indexPath));
             }
 
             var fullPath = Path.GetFullPath(file.Path);
             if (file.SizeBytes < 0)
             {
-                throw new ProjectFileIndexException($"ファイル索引に負のサイズがあります: {fullPath}");
+                throw new ProjectFileIndexException(LocalizationService.Format("IndexNegativeSize", fullPath));
             }
 
             uniqueFiles[fullPath] = new IndexedFile

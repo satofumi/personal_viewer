@@ -1,4 +1,5 @@
 using System.IO;
+using PersonalViewer.Localization;
 using System.Text;
 using PersonalViewer.Configuration;
 using YamlDotNet.Core;
@@ -34,12 +35,12 @@ public sealed class UnknownFileStore
         }
         catch (YamlException exception)
         {
-            throw new UnknownFileStoreException($"unknown.yaml の YAML を解析できません: {unknownPath}", exception);
+            throw new UnknownFileStoreException(LocalizationService.Format("UnknownYamlParse", unknownPath), exception);
         }
 
         if (unknownFiles is null)
         {
-            throw new UnknownFileStoreException($"unknown.yaml が空です: {unknownPath}");
+            throw new UnknownFileStoreException(LocalizationService.Format("UnknownYamlEmpty", unknownPath));
         }
 
         return Normalize(unknownFiles.Files, unknownPath);
@@ -71,7 +72,7 @@ public sealed class UnknownFileStore
     {
         if (files is null)
         {
-            throw new UnknownFileStoreException($"unknown.yaml に files がありません: {unknownPath}");
+            throw new UnknownFileStoreException(LocalizationService.Format("UnknownFilesMissing", unknownPath));
         }
 
         var uniqueFiles = new Dictionary<string, UnknownFileEntry>(StringComparer.OrdinalIgnoreCase);
@@ -79,7 +80,7 @@ public sealed class UnknownFileStore
         {
             if (file is null || string.IsNullOrWhiteSpace(file.Path) || !Path.IsPathFullyQualified(file.Path))
             {
-                throw new UnknownFileStoreException($"unknown.yaml に正しくない絶対パスがあります: {unknownPath}");
+                throw new UnknownFileStoreException(LocalizationService.Format("UnknownPathInvalid", unknownPath));
             }
 
             var fullPath = Path.GetFullPath(file.Path);

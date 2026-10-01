@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using Microsoft.Win32;
 using PersonalViewer.Configuration;
+using PersonalViewer.Localization;
 
 namespace PersonalViewer.Projects;
 
@@ -14,7 +15,11 @@ public partial class NewProjectWindow : Window
         ArgumentNullException.ThrowIfNull(settings);
         InitializeComponent();
 
-        MediaTypeComboBox.ItemsSource = settings.MediaTypes;
+        MediaTypeComboBox.ItemsSource = settings.MediaTypes
+            .Select(mediaType => new MediaTypeOption(
+                mediaType,
+                GetMediaTypeDisplayName(mediaType.Name)))
+            .ToArray();
         if (settings.MediaTypes.Count > 0)
         {
             MediaTypeComboBox.SelectedIndex = 0;
@@ -27,7 +32,7 @@ public partial class NewProjectWindow : Window
     {
         var dialog = new OpenFolderDialog
         {
-            Title = "登録するフォルダーを選択",
+            Title = LocalizationService.GetString("SelectRegisteredFolderDialog"),
             Multiselect = false
         };
 
@@ -45,20 +50,21 @@ public partial class NewProjectWindow : Window
         var projectName = ProjectNameTextBox.Text.Trim();
         if (projectName.Length == 0)
         {
-            ShowValidationError("プロジェクト名を入力してください。", ProjectNameTextBox);
+            ShowValidationError(LocalizationService.GetString("ProjectNameRequired"), ProjectNameTextBox);
             return;
         }
 
-        if (MediaTypeComboBox.SelectedItem is not MediaTypeDefinition mediaType)
+        if (MediaTypeComboBox.SelectedItem is not MediaTypeOption mediaTypeOption)
         {
-            ShowValidationError("メディア種別を選択してください。", MediaTypeComboBox);
+            ShowValidationError(LocalizationService.GetString("MediaTypeRequired"), MediaTypeComboBox);
             return;
         }
 
+        var mediaType = mediaTypeOption.MediaType;
         var folderPath = FolderPathTextBox.Text.Trim();
         if (folderPath.Length == 0 || !Directory.Exists(folderPath))
         {
-            ShowValidationError("登録するフォルダーを選択してください。", BrowseFolderButton);
+            ShowValidationError(LocalizationService.GetString("RegisteredFolderRequired"), BrowseFolderButton);
             return;
         }
 
@@ -71,6 +77,23 @@ public partial class NewProjectWindow : Window
 
         DialogResult = true;
     }
+
+    private static string GetMediaTypeDisplayName(string name)
+    {
+        if (StringComparer.OrdinalIgnoreCase.Equals(name, "Video"))
+        {
+            return LocalizationService.GetString("MediaTypeVideo");
+        }
+
+        if (StringComparer.OrdinalIgnoreCase.Equals(name, "Image"))
+        {
+            return LocalizationService.GetString("MediaTypeImage");
+        }
+
+        return name;
+    }
+
+    private sealed record MediaTypeOption(MediaTypeDefinition MediaType, string DisplayName);
 
     private void ShowValidationError(string message, IInputElement inputElement)
     {
