@@ -23,7 +23,7 @@ public partial class MainWindow : Window
         Interval = StatusMessageDuration
     };
     private readonly MediaFileScanner _mediaFileScanner = new();
-    private readonly ProjectFileIndexStore _projectFileIndexStore = new();
+    private readonly ProjectFileIndexUpdater _projectFileIndexUpdater = new(new ProjectFileIndexStore(), new UnknownFileStore());
     private IReadOnlyList<ProjectInfo> _projects = [];
     private bool _suppressProjectSelectionChanged;
     private bool _scanInProgress;
@@ -147,6 +147,7 @@ public partial class MainWindow : Window
 
     private void RefreshFolderTree()
     {
+        SearchTextBox.Clear();
         FolderTreeView.Items.Clear();
         FolderPlaceholderText.Visibility = CurrentProject is null ? Visibility.Visible : Visibility.Collapsed;
         if (CurrentProject is null)
@@ -156,11 +157,11 @@ public partial class MainWindow : Window
 
         foreach (var folder in CurrentProject.Folders)
         {
-            FolderTreeView.Items.Add(CreateFolderTreeItem(folder));
+            FolderTreeView.Items.Add(CreateFolderTreeItem(folder, folder));
         }
     }
 
-    private TreeViewItem CreateFolderTreeItem(string folderPath)
+    private TreeViewItem CreateFolderTreeItem(string folderPath, string rootPath)
     {
         var fullPath = Path.GetFullPath(folderPath);
         var folderName = new DirectoryInfo(fullPath).Name;
@@ -169,7 +170,7 @@ public partial class MainWindow : Window
             folderName = fullPath;
         }
 
-        var folderNode = new FolderTreeNode(fullPath, HasSubfolders(fullPath));
+        var folderNode = new FolderTreeNode(fullPath, Path.GetFullPath(rootPath), HasSubfolders(fullPath));
         var item = new TreeViewItem
         {
             Header = CreateFolderHeader(folderName),
@@ -196,6 +197,39 @@ public partial class MainWindow : Window
         }
 
         return item;
+    }
+
+    private void FolderTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is not TreeViewItem { Tag: FolderTreeNode folderNode })
+        {
+            return;
+        }
+
+        SearchTextBox.Text = GetFolderSearchText(folderNode);
+        SearchTextBox.CaretIndex = SearchTextBox.Text.Length;
+    }
+
+    private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        SearchPlaceholderText.Visibility = string.IsNullOrEmpty(SearchTextBox.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private static string GetFolderSearchText(FolderTreeNode folderNode)
+    {
+        var rootName = new DirectoryInfo(folderNode.RootPath).Name;
+        if (string.IsNullOrWhiteSpace(rootName))
+        {
+            rootName = folderNode.RootPath;
+        }
+
+        var relativePath = Path.GetRelativePath(folderNode.RootPath, folderNode.FullPath);
+        var projectRelativePath = relativePath == "."
+            ? rootName
+            : Path.Combine(rootName, relativePath);
+        return $":folder:{projectRelativePath}";
     }
 
     private void FolderTreeItem_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -267,7 +301,7 @@ public partial class MainWindow : Window
                 .ToArray();
             foreach (var subfolder in subfolders)
             {
-                item.Items.Add(CreateFolderTreeItem(subfolder));
+                item.Items.Add(CreateFolderTreeItem(subfolder, folderNode.RootPath));
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
@@ -339,7 +373,6 @@ public partial class MainWindow : Window
             savedProject,
             app.Settings,
             folderPath: null,
-            mergeWithExistingIndex: false,
             "プロジェクトのフォルダーをスキャンしています...",
             "プロジェクトを作成し、スキャンしました。",
             "プロジェクトは作成しましたが、初回スキャンに失敗しました。");
@@ -416,7 +449,6 @@ public partial class MainWindow : Window
             savedProject,
             ((App)Application.Current).Settings,
             folderPath,
-            mergeWithExistingIndex: true,
             "追加したフォルダーをスキャンしています...",
             "フォルダーを追加し、スキャンしました。",
             "フォルダーは追加しましたが、そのフォルダーのスキャンに失敗しました。");
@@ -446,7 +478,6 @@ public partial class MainWindow : Window
             project,
             app.Settings,
             folderNode.FullPath,
-            mergeWithExistingIndex: true,
             $"フォルダー「{folderName}」を再スキャンしています...",
             $"フォルダー「{folderName}」を再スキャンしました。",
             $"フォルダー「{folderName}」の再スキャンに失敗しました。");
@@ -465,7 +496,6 @@ public partial class MainWindow : Window
         ProjectInfo project,
         AppSettings settings,
         string? folderPath,
-        bool mergeWithExistingIndex,
         string progressMessage,
         string completionMessage,
         string failureMessage)
@@ -474,28 +504,31 @@ public partial class MainWindow : Window
         ShowStatusMessage(progressMessage, dismissAfterDelay: false);
         try
         {
-            var scannedFiles = await Task.Run(() =>
+            var scanResult = await Task.Run(() =>
                 folderPath is null
                     ? _mediaFileScanner.Scan(project, settings)
                     : _mediaFileScanner.ScanFolder(project, folderPath, settings));
 
-            await Task.Run(() =>
-            {
-                IEnumerable<IndexedFile> filesToSave = scannedFiles;
-                if (mergeWithExistingIndex)
-                {
-                    filesToSave = _projectFileIndexStore.Load(project).Concat(scannedFiles);
-                }
-
-                _projectFileIndexStore.Save(project, filesToSave);
-            });
+            var scannedFolders = folderPath is null ? project.Folders : [folderPath];
+            await Task.Run(() => _projectFileIndexUpdater.UpdateAfterScan(
+                project,
+                scannedFolders,
+                scanResult.Files,
+                scanResult.IncompletePaths));
 
             if (IsVisible)
             {
-                ShowStatusMessage(completionMessage);
+                var issueCount = scanResult.Issues
+                    .Select(issue => issue.Path)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
+                var message = issueCount == 0
+                    ? completionMessage
+                    : $"{completionMessage} 一部を読み込めませんでした（{issueCount} 件）。";
+                ShowStatusMessage(message);
             }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException or UnknownFileStoreException)
         {
             if (IsVisible)
             {
@@ -528,5 +561,5 @@ public partial class MainWindow : Window
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath));
     }
 
-    private sealed record FolderTreeNode(string FullPath, bool HasSubfolders);
+    private sealed record FolderTreeNode(string FullPath, string RootPath, bool HasSubfolders);
 }

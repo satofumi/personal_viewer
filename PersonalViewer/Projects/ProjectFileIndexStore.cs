@@ -104,7 +104,8 @@ public sealed class ProjectFileIndexStore
                 Path = fullPath,
                 Extension = Path.GetExtension(fullPath).ToLowerInvariant(),
                 SizeBytes = file.SizeBytes,
-                LastModifiedUtc = NormalizeUtc(file.LastModifiedUtc)
+                LastModifiedUtc = NormalizeUtc(file.LastModifiedUtc),
+                Tags = NormalizeTags(file.Tags)
             };
         }
 
@@ -121,6 +122,14 @@ public sealed class ProjectFileIndexStore
             DateTimeKind.Local => dateTime.ToUniversalTime(),
             _ => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)
         };
+    }
+
+    private static List<string> NormalizeTags(IEnumerable<string>? tags)
+    {
+        return (tags ?? [])
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 }
 

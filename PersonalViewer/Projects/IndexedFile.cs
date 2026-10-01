@@ -9,4 +9,6 @@ public sealed class IndexedFile
     public long SizeBytes { get; set; }
 
     public DateTime LastModifiedUtc { get; set; }
+
+    public List<string> Tags { get; set; } = [];
 }

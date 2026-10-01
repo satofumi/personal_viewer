@@ -1,11 +1,12 @@
 using System.IO;
+using System.Security;
 using PersonalViewer.Configuration;
 
 namespace PersonalViewer.Projects;
 
 public sealed class MediaFileScanner
 {
-    public IReadOnlyList<IndexedFile> ScanFolder(ProjectInfo project, string folderPath, AppSettings settings)
+    public MediaFileScanResult ScanFolder(ProjectInfo project, string folderPath, AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(folderPath);
@@ -19,7 +20,7 @@ public sealed class MediaFileScanner
         }, settings);
     }
 
-    public IReadOnlyList<IndexedFile> Scan(ProjectInfo project, AppSettings settings)
+    public MediaFileScanResult Scan(ProjectInfo project, AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(settings);
@@ -48,6 +49,10 @@ public sealed class MediaFileScanner
                 .Select(extension => extension.Trim().ToLowerInvariant()),
             StringComparer.Ordinal);
         var indexedFiles = new Dictionary<string, IndexedFile>(StringComparer.OrdinalIgnoreCase);
+        var issues = new List<MediaFileScanIssue>();
+        var incompletePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Exception? firstEnumerationException = null;
+        var successfulEnumerationCount = 0;
 
         foreach (var folder in project.Folders)
         {
@@ -57,45 +62,132 @@ public sealed class MediaFileScanner
             }
 
             var rootPath = System.IO.Path.GetFullPath(folder);
-            foreach (var filePath in Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories))
+            if (!Directory.Exists(rootPath))
             {
-                var fullPath = System.IO.Path.GetFullPath(filePath);
-                var extension = System.IO.Path.GetExtension(fullPath).ToLowerInvariant();
-                if (!allowedExtensions.Contains(extension))
+                RecordPartialFailure(rootPath, new DirectoryNotFoundException($"スキャン対象フォルダーが見つかりません: {rootPath}"));
+                incompletePaths.Add(rootPath);
+                continue;
+            }
+
+            ScanDirectory(rootPath);
+        }
+
+        if (successfulEnumerationCount == 0 && firstEnumerationException is not null)
+        {
+            throw new IOException($"スキャン対象を読み取れませんでした: {firstEnumerationException.Message}", firstEnumerationException);
+        }
+
+        return new MediaFileScanResult(
+            indexedFiles.Values.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray(),
+            issues,
+            incompletePaths);
+
+        void ScanDirectory(string directoryPath)
+        {
+            var childDirectories = new List<string>();
+            try
+            {
+                foreach (var filePath in Directory.EnumerateFiles(directoryPath))
                 {
-                    continue;
+                    ScanFile(filePath);
                 }
 
+                successfulEnumerationCount++;
+            }
+            catch (Exception exception) when (IsScanAccessException(exception))
+            {
+                RecordPartialFailure(directoryPath, exception);
+                incompletePaths.Add(directoryPath);
+            }
+
+            try
+            {
+                foreach (var childDirectory in Directory.EnumerateDirectories(directoryPath))
+                {
+                    childDirectories.Add(childDirectory);
+                }
+
+                successfulEnumerationCount++;
+            }
+            catch (Exception exception) when (IsScanAccessException(exception))
+            {
+                RecordPartialFailure(directoryPath, exception);
+                incompletePaths.Add(directoryPath);
+            }
+
+            foreach (var childDirectory in childDirectories.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                ScanDirectory(childDirectory);
+            }
+        }
+
+        void ScanFile(string filePath)
+        {
+            var fullPath = System.IO.Path.GetFullPath(filePath);
+            var extension = System.IO.Path.GetExtension(fullPath).ToLowerInvariant();
+            if (!allowedExtensions.Contains(extension))
+            {
+                return;
+            }
+
+            try
+            {
                 var fileInfo = new FileInfo(fullPath);
-                try
+                fileInfo.Refresh();
+                if (!fileInfo.Exists)
                 {
-                    fileInfo.Refresh();
-                    if (!fileInfo.Exists)
-                    {
-                        continue;
-                    }
+                    RecordPartialFailure(fullPath, new FileNotFoundException("列挙後にファイルが見つかりませんでした。", fullPath));
+                    return;
+                }
 
-                    indexedFiles[fullPath] = new IndexedFile
-                    {
-                        Path = fullPath,
-                        Extension = extension,
-                        SizeBytes = fileInfo.Length,
-                        LastModifiedUtc = fileInfo.LastWriteTimeUtc
-                    };
-                }
-                catch (FileNotFoundException)
+                indexedFiles[fullPath] = new IndexedFile
                 {
-                    // The file may have been removed after directory enumeration.
-                }
-                catch (DirectoryNotFoundException)
+                    Path = fullPath,
+                    Extension = extension,
+                    SizeBytes = fileInfo.Length,
+                    LastModifiedUtc = fileInfo.LastWriteTimeUtc
+                };
+            }
+            catch (Exception exception) when (IsScanAccessException(exception))
+            {
+                RecordPartialFailure(fullPath, exception);
+                if (exception is not FileNotFoundException and not DirectoryNotFoundException)
                 {
-                    // The file's parent directory may have been removed after enumeration.
+                    incompletePaths.Add(fullPath);
                 }
             }
         }
 
-        return indexedFiles.Values
-            .OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        void RecordPartialFailure(string path, Exception exception)
+        {
+            firstEnumerationException ??= exception;
+            issues.Add(new MediaFileScanIssue(path, exception.Message));
+        }
+    }
+
+    private static bool IsScanAccessException(Exception exception)
+    {
+        return exception is IOException or UnauthorizedAccessException or SecurityException;
     }
 }
+
+public sealed class MediaFileScanResult
+{
+    public MediaFileScanResult(
+        IReadOnlyList<IndexedFile> files,
+        IReadOnlyList<MediaFileScanIssue> issues,
+        IReadOnlyCollection<string> incompletePaths)
+    {
+        Files = files;
+        Issues = issues;
+        IncompletePaths = incompletePaths;
+    }
+
+    public IReadOnlyList<IndexedFile> Files { get; }
+
+    public IReadOnlyList<MediaFileScanIssue> Issues { get; }
+
+    public IReadOnlyCollection<string> IncompletePaths { get; }
+}
+
+public sealed record MediaFileScanIssue(string Path, string Reason);
