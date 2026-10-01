@@ -5,6 +5,8 @@ public sealed class AppSettings
     public List<MediaTypeDefinition> MediaTypes { get; set; } = [];
 
     public string? LastProjectId { get; set; }
+
+    public string LastViewMode { get; set; } = "details";
 }
 
 public sealed class MediaTypeDefinition

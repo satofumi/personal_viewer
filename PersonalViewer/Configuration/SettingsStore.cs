@@ -32,6 +32,7 @@ public static class SettingsStore
           - ".tif"
           - ".tiff"
           - ".webp"
+    last_view_mode: details
     """;
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
@@ -87,6 +88,22 @@ public static class SettingsStore
             normalizedProjectId = parsedProjectId.ToString("N");
         }
 
+        WriteScalarSetting("last_project_id", normalizedProjectId ?? "null");
+    }
+
+    public static void SaveLastViewMode(string viewMode)
+    {
+        var normalizedViewMode = viewMode?.Trim().ToLowerInvariant();
+        if (normalizedViewMode is not ("details" or "thumbnails"))
+        {
+            throw new ArgumentException("表示モードは details または thumbnails にしてください。", nameof(viewMode));
+        }
+
+        WriteScalarSetting("last_view_mode", normalizedViewMode);
+    }
+
+    private static void WriteScalarSetting(string propertyName, string value)
+    {
         var fileBytes = File.ReadAllBytes(SettingsFilePath);
         var hasUtf8Bom = fileBytes.Length >= 3 && fileBytes[0] == 0xEF && fileBytes[1] == 0xBB && fileBytes[2] == 0xBF;
         var yaml = File.ReadAllText(SettingsFilePath, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
@@ -106,19 +123,21 @@ public static class SettingsStore
         }
 
         var newline = yaml.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        var propertyMatches = Regex.Matches(yaml, @"(?m)^(?:last_project_id|""last_project_id""|'last_project_id')[ \t]*:[^\r\n]*");
+        var escapedPropertyName = Regex.Escape(propertyName);
+        var propertyMatches = Regex.Matches(
+            yaml,
+            $@"(?m)^(?:{escapedPropertyName}|""{escapedPropertyName}""|'{escapedPropertyName}')[ \t]*:[^\r\n]*");
         if (propertyMatches.Count > 1)
         {
-            throw new SettingsFileException("settings.yaml に last_project_id が重複しています。");
+            throw new SettingsFileException($"settings.yaml に {propertyName} が重複しています。");
         }
 
-        var value = normalizedProjectId ?? "null";
         if (propertyMatches.Count == 1)
         {
             var match = propertyMatches[0];
             var commentMatch = Regex.Match(match.Value, @"[ \t]+#(?<comment>.*)$");
             var comment = commentMatch.Success ? $"  #{commentMatch.Groups["comment"].Value}" : string.Empty;
-            yaml = yaml[..match.Index] + $"last_project_id: {value}{comment}" + yaml[(match.Index + match.Length)..];
+            yaml = yaml[..match.Index] + $"{propertyName}: {value}{comment}" + yaml[(match.Index + match.Length)..];
         }
         else
         {
@@ -127,7 +146,7 @@ public static class SettingsStore
                 yaml += newline;
             }
 
-            yaml += $"last_project_id: {value}{newline}";
+            yaml += $"{propertyName}: {value}{newline}";
         }
 
         var temporaryPath = SettingsFilePath + ".tmp";
@@ -145,6 +164,10 @@ public static class SettingsStore
         {
             settings.LastProjectId = lastProjectId.ToString("N");
         }
+
+        settings.LastViewMode = string.Equals(settings.LastViewMode?.Trim(), "thumbnails", StringComparison.OrdinalIgnoreCase)
+            ? "thumbnails"
+            : "details";
 
         if (settings.MediaTypes is null || settings.MediaTypes.Count == 0)
         {

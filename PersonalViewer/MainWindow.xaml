@@ -64,6 +64,61 @@
             <Setter Property="Foreground" Value="#303844" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
+
+        <ItemsPanelTemplate x:Key="ResultsItemsPanelTemplate">
+            <VirtualizingStackPanel />
+        </ItemsPanelTemplate>
+
+        <ItemsPanelTemplate x:Key="ThumbnailItemsPanelTemplate">
+            <WrapPanel />
+        </ItemsPanelTemplate>
+
+        <DataTemplate x:Key="ThumbnailResultTemplate">
+            <Border Width="144"
+                    Height="124"
+                    Margin="3"
+                    Padding="6"
+                    Background="White"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="5">
+                <DockPanel LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Bottom"
+                               MaxHeight="36"
+                               Margin="0,4,0,0"
+                               Text="{Binding FileName}"
+                               TextAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="Wrap"
+                               ToolTip="{Binding FileName}" />
+                    <Grid Width="128"
+                          Height="72"
+                          Background="#F3F5F8">
+                        <Image MaxWidth="96"
+                               MaxHeight="96"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Source="{Binding Thumbnail}"
+                               Stretch="Uniform" />
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   Text="サムネイルなし">
+                            <TextBlock.Style>
+                                <Style TargetType="{x:Type TextBlock}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                </DockPanel>
+            </Border>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid>
@@ -147,15 +202,19 @@
                           SelectionChanged="ProjectComboBox_SelectionChanged"
                           ToolTip="プロジェクトを選択" />
 
-                <ToggleButton Grid.Column="2"
+                <ToggleButton x:Name="DetailsViewButton"
+                              Grid.Column="2"
                               Style="{StaticResource ToolbarButtonStyle}"
                               Content="☷  詳細表示"
                               IsChecked="True"
+                              Click="DetailsViewButton_Click"
                               ToolTip="詳細表示" />
 
-                <ToggleButton Grid.Column="3"
+                <ToggleButton x:Name="ThumbnailViewButton"
+                              Grid.Column="3"
                               Style="{StaticResource ToolbarButtonStyle}"
                               Content="▦  サムネイル"
+                              Click="ThumbnailViewButton_Click"
                               ToolTip="サムネイル表示" />
             </Grid>
         </Border>
@@ -255,13 +314,26 @@
                                   Margin="6"
                                   Background="Transparent"
                                   BorderThickness="0"
-                                  SelectionMode="Extended">
-                            <ListView.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding FileName}"
-                                               TextTrimming="CharacterEllipsis" />
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
+                                  ItemsPanel="{StaticResource ResultsItemsPanelTemplate}"
+                                  SelectionMode="Extended"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  GridViewColumnHeader.Click="ResultsListView_ColumnHeaderClick">
+                            <ListView.View>
+                                <GridView x:Name="DetailsGridView">
+                                    <GridViewColumn Header="ファイル名"
+                                                    Width="360"
+                                                    DisplayMemberBinding="{Binding FileName}" />
+                                    <GridViewColumn Header="更新日時"
+                                                    Width="155"
+                                                    DisplayMemberBinding="{Binding LastModifiedLocal, StringFormat={}{0:yyyy/MM/dd HH:mm:ss}}" />
+                                    <GridViewColumn Header="種類"
+                                                    Width="90"
+                                                    DisplayMemberBinding="{Binding FileType}" />
+                                    <GridViewColumn Header="サイズ"
+                                                    Width="110"
+                                                    DisplayMemberBinding="{Binding FileSize}" />
+                                </GridView>
+                            </ListView.View>
                         </ListView>
                         <TextBlock x:Name="ResultEmptyText"
                                    Margin="24"

@@ -4,10 +4,13 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using System.ComponentModel;
 using PersonalViewer.Configuration;
 using PersonalViewer.Projects;
+using PersonalViewer.Thumbnails;
 
 namespace PersonalViewer;
 
@@ -26,11 +29,16 @@ public partial class MainWindow : Window
     private readonly MediaFileScanner _mediaFileScanner = new();
     private readonly ProjectFileIndexStore _projectFileIndexStore = new();
     private readonly ProjectFileIndexUpdater _projectFileIndexUpdater = new(new ProjectFileIndexStore(), new UnknownFileStore());
+    private readonly WindowsThumbnailCache _thumbnailCache = new();
     private IReadOnlyList<ProjectInfo> _projects = [];
     private bool _suppressProjectSelectionChanged;
     private bool _settingFolderSearchText;
     private bool _scanInProgress;
     private SearchMode _searchMode;
+    private ResultSortColumn _sortColumn = ResultSortColumn.FileName;
+    private bool _sortAscending = true;
+    private bool _showThumbnailView;
+    private CancellationTokenSource? _thumbnailLoadCancellation;
     private CancellationTokenSource? _keywordSearchCancellation;
 
     public ProjectInfo? CurrentProject { get; private set; }
@@ -38,10 +46,14 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        UpdateSortHeaders();
+        var app = (App)Application.Current;
+        SetResultsView(details: !string.Equals(app.Settings.LastViewMode, "thumbnails", StringComparison.Ordinal));
         _statusMessageTimer.Tick += StatusMessageTimer_Tick;
         Closed += (_, _) =>
         {
             _statusMessageTimer.Stop();
+            CancelThumbnailLoading();
             CancelKeywordSearch();
         };
         Loaded += MainWindow_Loaded;
@@ -395,10 +407,196 @@ public partial class MainWindow : Window
 
     private void SetSearchResults(IReadOnlyCollection<SearchResultItem> results, string emptyMessage)
     {
-        ResultsListView.ItemsSource = results;
+        var sortedResults = SortSearchResults(results);
+        ResultsListView.ItemsSource = sortedResults;
         ResultCountText.Text = $"{results.Count} 件";
         ResultEmptyText.Text = emptyMessage;
         ResultEmptyText.Visibility = results.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (_showThumbnailView)
+        {
+            LoadThumbnails(sortedResults);
+        }
+    }
+
+    private void DetailsViewButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetResultsView(details: true);
+        SaveLastViewMode("details");
+    }
+
+    private void ThumbnailViewButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetResultsView(details: false);
+        SaveLastViewMode("thumbnails");
+    }
+
+    private static void SaveLastViewMode(string viewMode)
+    {
+        var app = (App)Application.Current;
+        app.Settings.LastViewMode = viewMode;
+        try
+        {
+            SettingsStore.SaveLastViewMode(viewMode);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SettingsFileException)
+        {
+            MessageBox.Show(
+                $"表示モードを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void SetResultsView(bool details)
+    {
+        _showThumbnailView = !details;
+        DetailsViewButton.IsChecked = details;
+        ThumbnailViewButton.IsChecked = !details;
+        ResultsListView.View = details ? DetailsGridView : null;
+        ResultsListView.ItemTemplate = details
+            ? null
+            : (DataTemplate)FindResource("ThumbnailResultTemplate");
+        ResultsListView.ItemsPanel = details
+            ? (ItemsPanelTemplate)FindResource("ResultsItemsPanelTemplate")
+            : (ItemsPanelTemplate)FindResource("ThumbnailItemsPanelTemplate");
+
+        if (details)
+        {
+            CancelThumbnailLoading();
+        }
+        else if (ResultsListView.ItemsSource is IReadOnlyCollection<SearchResultItem> results)
+        {
+            LoadThumbnails(results);
+        }
+    }
+
+    private void LoadThumbnails(IEnumerable<SearchResultItem> results)
+    {
+        CancelThumbnailLoading();
+        var cancellationSource = new CancellationTokenSource();
+        _thumbnailLoadCancellation = cancellationSource;
+        foreach (var result in results)
+        {
+            _ = LoadThumbnailAsync(result, cancellationSource.Token);
+        }
+    }
+
+    private async Task LoadThumbnailAsync(SearchResultItem result, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var thumbnailData = await _thumbnailCache.GetThumbnailAsync(result.File, cancellationToken);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    result.Thumbnail = CreateThumbnail(thumbnailData);
+                }
+            }, DispatcherPriority.DataBind);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            // A single file without an available thumbnail should not prevent other results from appearing.
+        }
+    }
+
+    private static ImageSource? CreateThumbnail(byte[]? thumbnailData)
+    {
+        if (thumbnailData is null)
+        {
+            return null;
+        }
+
+        using var stream = new MemoryStream(thumbnailData, writable: false);
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.StreamSource = stream;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private void CancelThumbnailLoading()
+    {
+        _thumbnailLoadCancellation?.Cancel();
+        _thumbnailLoadCancellation?.Dispose();
+        _thumbnailLoadCancellation = null;
+    }
+
+    private void ResultsListView_ColumnHeaderClick(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not GridViewColumnHeader header
+            || header.Role == GridViewColumnHeaderRole.Padding
+            || header.Column is null)
+        {
+            return;
+        }
+
+        var columnIndex = DetailsGridView.Columns.IndexOf(header.Column);
+        if (columnIndex < 0 || columnIndex > (int)ResultSortColumn.Size)
+        {
+            return;
+        }
+
+        var clickedColumn = (ResultSortColumn)columnIndex;
+        if (_sortColumn == clickedColumn)
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = clickedColumn;
+            _sortAscending = true;
+        }
+
+        UpdateSortHeaders();
+        if (ResultsListView.ItemsSource is IReadOnlyCollection<SearchResultItem> results)
+        {
+            ResultsListView.ItemsSource = SortSearchResults(results);
+        }
+    }
+
+    private void UpdateSortHeaders()
+    {
+        var labels = new[] { "ファイル名", "更新日時", "種類", "サイズ" };
+        for (var index = 0; index < labels.Length; index++)
+        {
+            var indicator = index == (int)_sortColumn
+                ? _sortAscending ? " ▲" : " ▼"
+                : string.Empty;
+            DetailsGridView.Columns[index].Header = labels[index] + indicator;
+        }
+    }
+
+    private IReadOnlyCollection<SearchResultItem> SortSearchResults(IEnumerable<SearchResultItem> results)
+    {
+        IOrderedEnumerable<SearchResultItem> sorted = _sortColumn switch
+        {
+            ResultSortColumn.FileName => OrderBy(results, result => result.FileName, StringComparer.OrdinalIgnoreCase),
+            ResultSortColumn.LastModified => OrderBy(results, result => result.File.LastModifiedUtc),
+            ResultSortColumn.FileType => OrderBy(results, result => result.FileType, StringComparer.OrdinalIgnoreCase),
+            ResultSortColumn.Size => OrderBy(results, result => result.File.SizeBytes),
+            _ => OrderBy(results, result => result.FileName, StringComparer.OrdinalIgnoreCase)
+        };
+
+        return sorted
+            .ThenBy(result => result.File.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private IOrderedEnumerable<SearchResultItem> OrderBy<TKey>(
+        IEnumerable<SearchResultItem> results,
+        Func<SearchResultItem, TKey> selector,
+        IComparer<TKey>? comparer = null)
+    {
+        return _sortAscending
+            ? results.OrderBy(selector, comparer)
+            : results.OrderByDescending(selector, comparer);
     }
 
     private static string GetFolderSearchText(FolderTreeNode folderNode)
@@ -752,7 +950,41 @@ public partial class MainWindow : Window
         Keyword
     }
 
+    private enum ResultSortColumn
+    {
+        FileName,
+        LastModified,
+        FileType,
+        Size
+    }
+
     private sealed record FolderTreeNode(string FullPath, string RootPath, bool HasSubfolders);
 
-    private sealed record SearchResultItem(IndexedFile File, string FileName);
+    private sealed record SearchResultItem(IndexedFile File, string FileName) : INotifyPropertyChanged
+    {
+        private ImageSource? _thumbnail;
+
+        public DateTime LastModifiedLocal => File.LastModifiedUtc.ToLocalTime();
+
+        public string FileType => File.Extension;
+
+        public string FileSize => $"{File.SizeBytes:N0} B";
+
+        public ImageSource? Thumbnail
+        {
+            get => _thumbnail;
+            set
+            {
+                if (ReferenceEquals(_thumbnail, value))
+                {
+                    return;
+                }
+
+                _thumbnail = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
 }
