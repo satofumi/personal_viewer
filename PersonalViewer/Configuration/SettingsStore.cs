@@ -1,4 +1,5 @@
 ﻿using System.IO;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using YamlDotNet.Core;
@@ -102,7 +103,36 @@ public static class SettingsStore
         WriteScalarSetting("last_view_mode", normalizedViewMode);
     }
 
+    public static void SaveWindowBounds(double left, double top, double width, double height)
+    {
+        if (!double.IsFinite(left)
+            || !double.IsFinite(top)
+            || !double.IsFinite(width)
+            || !double.IsFinite(height)
+            || width <= 0
+            || height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "ウィンドウ位置とサイズが正しくありません。");
+        }
+
+        WriteScalarSettings(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["window_left"] = left.ToString("R", CultureInfo.InvariantCulture),
+            ["window_top"] = top.ToString("R", CultureInfo.InvariantCulture),
+            ["window_width"] = width.ToString("R", CultureInfo.InvariantCulture),
+            ["window_height"] = height.ToString("R", CultureInfo.InvariantCulture)
+        });
+    }
+
     private static void WriteScalarSetting(string propertyName, string value)
+    {
+        WriteScalarSettings(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [propertyName] = value
+        });
+    }
+
+    private static void WriteScalarSettings(IReadOnlyDictionary<string, string> values)
     {
         var fileBytes = File.ReadAllBytes(SettingsFilePath);
         var hasUtf8Bom = fileBytes.Length >= 3 && fileBytes[0] == 0xEF && fileBytes[1] == 0xBB && fileBytes[2] == 0xBF;
@@ -123,30 +153,33 @@ public static class SettingsStore
         }
 
         var newline = yaml.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        var escapedPropertyName = Regex.Escape(propertyName);
-        var propertyMatches = Regex.Matches(
-            yaml,
-            $@"(?m)^(?:{escapedPropertyName}|""{escapedPropertyName}""|'{escapedPropertyName}')[ \t]*:[^\r\n]*");
-        if (propertyMatches.Count > 1)
+        foreach (var (propertyName, value) in values)
         {
-            throw new SettingsFileException($"settings.yaml に {propertyName} が重複しています。");
-        }
-
-        if (propertyMatches.Count == 1)
-        {
-            var match = propertyMatches[0];
-            var commentMatch = Regex.Match(match.Value, @"[ \t]+#(?<comment>.*)$");
-            var comment = commentMatch.Success ? $"  #{commentMatch.Groups["comment"].Value}" : string.Empty;
-            yaml = yaml[..match.Index] + $"{propertyName}: {value}{comment}" + yaml[(match.Index + match.Length)..];
-        }
-        else
-        {
-            if (yaml.Length > 0 && !yaml.EndsWith('\n'))
+            var escapedPropertyName = Regex.Escape(propertyName);
+            var propertyMatches = Regex.Matches(
+                yaml,
+                $@"(?m)^(?:{escapedPropertyName}|""{escapedPropertyName}""|'{escapedPropertyName}')[ \t]*:[^\r\n]*");
+            if (propertyMatches.Count > 1)
             {
-                yaml += newline;
+                throw new SettingsFileException($"settings.yaml に {propertyName} が重複しています。");
             }
 
-            yaml += $"{propertyName}: {value}{newline}";
+            if (propertyMatches.Count == 1)
+            {
+                var match = propertyMatches[0];
+                var commentMatch = Regex.Match(match.Value, @"[ \t]+#(?<comment>.*)$");
+                var comment = commentMatch.Success ? $"  #{commentMatch.Groups["comment"].Value}" : string.Empty;
+                yaml = yaml[..match.Index] + $"{propertyName}: {value}{comment}" + yaml[(match.Index + match.Length)..];
+            }
+            else
+            {
+                if (yaml.Length > 0 && !yaml.EndsWith('\n'))
+                {
+                    yaml += newline;
+                }
+
+                yaml += $"{propertyName}: {value}{newline}";
+            }
         }
 
         var temporaryPath = SettingsFilePath + ".tmp";
@@ -168,6 +201,14 @@ public static class SettingsStore
         settings.LastViewMode = string.Equals(settings.LastViewMode?.Trim(), "thumbnails", StringComparison.OrdinalIgnoreCase)
             ? "thumbnails"
             : "details";
+
+        if (!HasValidWindowBounds(settings))
+        {
+            settings.WindowLeft = null;
+            settings.WindowTop = null;
+            settings.WindowWidth = null;
+            settings.WindowHeight = null;
+        }
 
         if (settings.MediaTypes is null || settings.MediaTypes.Count == 0)
         {
@@ -215,6 +256,20 @@ public static class SettingsStore
 
             mediaType.Extensions = normalizedExtensions;
         }
+    }
+
+    private static bool HasValidWindowBounds(AppSettings settings)
+    {
+        return settings.WindowLeft is double left
+            && settings.WindowTop is double top
+            && settings.WindowWidth is double width
+            && settings.WindowHeight is double height
+            && double.IsFinite(left)
+            && double.IsFinite(top)
+            && double.IsFinite(width)
+            && double.IsFinite(height)
+            && width > 0
+            && height > 0;
     }
 }
 

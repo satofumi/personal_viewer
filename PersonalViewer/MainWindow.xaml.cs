@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private ResultSortColumn _sortColumn = ResultSortColumn.FileName;
     private bool _sortAscending = true;
     private bool _showThumbnailView;
+    private bool _isTagInputVisible;
     private CancellationTokenSource? _thumbnailLoadCancellation;
     private CancellationTokenSource? _keywordSearchCancellation;
     private SearchResultItem? _contextMenuTarget;
@@ -50,6 +51,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         UpdateSortHeaders();
         var app = (App)Application.Current;
+        RestoreWindowBounds(app.Settings);
         SetResultsView(details: !string.Equals(app.Settings.LastViewMode, "thumbnails", StringComparison.Ordinal));
         _statusMessageTimer.Tick += StatusMessageTimer_Tick;
         Closed += (_, _) =>
@@ -58,6 +60,7 @@ public partial class MainWindow : Window
             CancelThumbnailLoading();
             CancelKeywordSearch();
         };
+        Closing += MainWindow_Closing;
         Loaded += MainWindow_Loaded;
         ShowStatusMessage("準備完了");
         LoadProjectsAndRestoreSelection();
@@ -67,6 +70,65 @@ public partial class MainWindow : Window
     {
         SearchTextBox.Focus();
         Keyboard.Focus(SearchTextBox);
+    }
+
+    private void RestoreWindowBounds(AppSettings settings)
+    {
+        if (settings.WindowLeft is not double left
+            || settings.WindowTop is not double top
+            || settings.WindowWidth is not double width
+            || settings.WindowHeight is not double height
+            || width < MinWidth
+            || height < MinHeight)
+        {
+            return;
+        }
+
+        var savedBounds = new Rect(left, top, width, height);
+        var virtualScreen = new Rect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        var visibleBounds = savedBounds;
+        visibleBounds.Intersect(virtualScreen);
+        if (visibleBounds.IsEmpty
+            || visibleBounds.Width < Math.Min(savedBounds.Width, 160)
+            || visibleBounds.Height < Math.Min(savedBounds.Height, 100))
+        {
+            return;
+        }
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = savedBounds.Left;
+        Top = savedBounds.Top;
+        Width = savedBounds.Width;
+        Height = savedBounds.Height;
+    }
+
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        var bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, Width, Height)
+            : RestoreBounds;
+        if (bounds.IsEmpty)
+        {
+            return;
+        }
+
+        try
+        {
+            SettingsStore.SaveWindowBounds(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SettingsFileException)
+        {
+            MessageBox.Show(
+                this,
+                $"ウィンドウ位置とサイズを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private void ShowStatusMessage(string message, bool dismissAfterDelay = true)
@@ -421,6 +483,7 @@ public partial class MainWindow : Window
     private void SetSearchResults(IReadOnlyCollection<SearchResultItem> results, string emptyMessage)
     {
         var sortedResults = SortSearchResults(results);
+        ResultsListView.SelectedItems.Clear();
         ResultsListView.ItemsSource = sortedResults;
         ResultCountText.Text = $"{results.Count} 件";
         ResultEmptyText.Text = emptyMessage;
@@ -428,6 +491,223 @@ public partial class MainWindow : Window
         if (_showThumbnailView)
         {
             LoadThumbnails(sortedResults);
+        }
+    }
+
+    private void ResultsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        SetTagInputVisible(visible: false);
+        RefreshSelectedTagsPanel();
+    }
+
+    private void RefreshSelectedTagsPanel()
+    {
+        var selectedFiles = ResultsListView.SelectedItems
+            .OfType<SearchResultItem>()
+            .ToArray();
+
+        AddTagButton.IsEnabled = selectedFiles.Length > 0 && CurrentProject is not null;
+        if (selectedFiles.Length == 0)
+        {
+            SelectedTagsItemsControl.ItemsSource = null;
+            SelectedTagsItemsControl.Visibility = Visibility.Collapsed;
+            TagPlaceholderText.Text = "ファイルを選択するとタグがここに表示されます";
+            TagPlaceholderText.Visibility = Visibility.Visible;
+            return;
+        }
+
+        var tagItems = selectedFiles.Length == 1
+            ? selectedFiles[0].File.Tags
+                .Select(tag => new TagDisplayItem(tag, string.Empty, CanRemove: true))
+                .ToArray()
+            : AggregateSelectedTags(selectedFiles);
+
+        SelectedTagsItemsControl.ItemsSource = tagItems;
+        SelectedTagsItemsControl.Visibility = tagItems.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        TagPlaceholderText.Text = selectedFiles.Length == 1
+            ? "タグはありません"
+            : "選択したファイルにタグはありません";
+        TagPlaceholderText.Visibility = tagItems.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static TagDisplayItem[] AggregateSelectedTags(IReadOnlyCollection<SearchResultItem> selectedFiles)
+    {
+        var tagCounts = new Dictionary<string, (string Name, int Count)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in selectedFiles)
+        {
+            foreach (var tag in file.File.Tags.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (tagCounts.TryGetValue(tag, out var entry))
+                {
+                    tagCounts[tag] = (entry.Name, entry.Count + 1);
+                }
+                else
+                {
+                    tagCounts[tag] = (tag, 1);
+                }
+            }
+        }
+
+        return tagCounts.Values
+            .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(entry => new TagDisplayItem(
+                entry.Name,
+                $"{entry.Count}/{selectedFiles.Count}",
+                CanRemove: true))
+            .ToArray();
+    }
+
+    private void AddTagButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResultsListView.SelectedItems.Count == 0 || CurrentProject is null)
+        {
+            return;
+        }
+
+        if (_isTagInputVisible)
+        {
+            AddTagFromInput();
+        }
+        else
+        {
+            SetTagInputVisible(visible: true);
+        }
+    }
+
+    private void NewTagTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            AddTagFromInput();
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            SetTagInputVisible(visible: false);
+        }
+    }
+
+    private void AddTagFromInput()
+    {
+        var selectedFiles = GetSelectedResultFiles();
+        if (selectedFiles.Length == 0 || CurrentProject is null)
+        {
+            return;
+        }
+
+        var tag = NewTagTextBox.Text.Trim();
+        if (tag.Length == 0)
+        {
+            return;
+        }
+
+        var updates = selectedFiles
+            .Where(file => !file.File.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+            .Select(file => (Item: file, Tags: (IEnumerable<string>)file.File.Tags.Append(tag)))
+            .ToArray();
+        if (updates.Length == 0)
+        {
+            ShowStatusMessage("選択中のファイルにはすべてこのタグが追加されています。");
+            return;
+        }
+
+        if (SaveTagsForFiles(updates, "タグを追加しました。"))
+        {
+            SetTagInputVisible(visible: false);
+        }
+    }
+
+    private void RemoveTagButton_Click(object sender, RoutedEventArgs e)
+    {
+        var selectedFiles = GetSelectedResultFiles();
+        if (selectedFiles.Length == 0
+            || sender is not Button { Tag: string tag })
+        {
+            return;
+        }
+
+        var updates = selectedFiles
+            .Where(file => file.File.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+            .Select(file => (
+                Item: file,
+                Tags: (IEnumerable<string>)file.File.Tags
+                    .Where(existingTag => !StringComparer.OrdinalIgnoreCase.Equals(existingTag, tag))))
+            .ToArray();
+        if (updates.Length == 0)
+        {
+            return;
+        }
+
+        SaveTagsForFiles(updates, "タグを削除しました。");
+    }
+
+    private SearchResultItem[] GetSelectedResultFiles()
+    {
+        return ResultsListView.SelectedItems
+            .OfType<SearchResultItem>()
+            .ToArray();
+    }
+
+    private bool SaveTagsForFiles(
+        IReadOnlyCollection<(SearchResultItem Item, IEnumerable<string> Tags)> updates,
+        string successMessage)
+    {
+        if (updates.Count == 0 || CurrentProject is null)
+        {
+            return false;
+        }
+
+        var normalizedUpdates = updates.ToDictionary(
+            update => update.Item.File.Path,
+            update => (IEnumerable<string>)update.Tags
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .Select(tag => tag.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            _projectFileIndexStore.SaveTags(CurrentProject, normalizedUpdates);
+            foreach (var update in updates)
+            {
+                update.Item.File.Tags = normalizedUpdates[update.Item.File.Path].ToList();
+            }
+
+            RefreshSelectedTagsPanel();
+            ShowStatusMessage(successMessage);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
+        {
+            MessageBox.Show(
+                this,
+                $"タグを保存できませんでした。{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return false;
+        }
+    }
+
+    private void SetTagInputVisible(bool visible)
+    {
+        _isTagInputVisible = visible;
+        NewTagTextBox.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        AddTagButton.Content = visible ? "✓" : "+";
+        AddTagButton.FontSize = visible ? 16 : 19;
+        AddTagButton.ToolTip = visible ? "入力したタグを追加" : "タグを追加";
+
+        if (visible)
+        {
+            NewTagTextBox.Clear();
+            NewTagTextBox.Focus();
+            Keyboard.Focus(NewTagTextBox);
+        }
+        else
+        {
+            NewTagTextBox.Clear();
         }
     }
 
@@ -825,6 +1105,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var version = typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "不明";
+        MessageBox.Show(
+            this,
+            $"Personal Viewer{Environment.NewLine}Version {version}",
+            "このアプリケーションについて",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
     private async void NewProjectMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (_scanInProgress)
@@ -1069,6 +1365,8 @@ public partial class MainWindow : Window
     }
 
     private sealed record FolderTreeNode(string FullPath, string RootPath, bool HasSubfolders);
+
+    private sealed record TagDisplayItem(string Name, string CountText, bool CanRemove);
 
     private sealed record SearchResultItem(IndexedFile File, string FileName) : INotifyPropertyChanged
     {

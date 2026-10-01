@@ -143,10 +143,12 @@
                           Header="プロジェクトにフォルダーを追加..."
                           Click="AddFolderMenuItem_Click" />
                 <Separator />
-                <MenuItem Header="終了" />
+                <MenuItem Header="終了"
+                          Click="ExitMenuItem_Click" />
             </MenuItem>
             <MenuItem Header="_Help">
-                <MenuItem Header="このアプリケーションについて" />
+                <MenuItem Header="このアプリケーションについて"
+                          Click="AboutMenuItem_Click" />
             </MenuItem>
         </Menu>
 
@@ -225,8 +227,83 @@
                 BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="0,0,0,1"
                 Padding="12,7">
-            <DockPanel LastChildFill="True">
-                <Button DockPanel.Dock="Right"
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Margin="0,0,12,0"
+                           VerticalAlignment="Center"
+                           FontWeight="SemiBold"
+                           Foreground="#46505D"
+                           Text="選択中のタグ" />
+                <Grid Grid.Column="1">
+                    <TextBlock x:Name="TagPlaceholderText"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource MutedBrush}"
+                               Text="ファイルを選択するとタグがここに表示されます" />
+                    <ScrollViewer MaxHeight="72"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <ItemsControl x:Name="SelectedTagsItemsControl"
+                                      Visibility="Collapsed">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,6,4"
+                                            Padding="8,3"
+                                            Background="#EEF3F8"
+                                            BorderBrush="#DCE4ED"
+                                            BorderThickness="1"
+                                            CornerRadius="10">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Text="{Binding Name}" />
+                                            <TextBlock Margin="5,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       Text="{Binding CountText}" />
+                                            <Button Margin="5,0,0,0"
+                                                    Padding="0"
+                                                    Width="18"
+                                                    Height="18"
+                                                    Content="×"
+                                                    Tag="{Binding Name}"
+                                                    Click="RemoveTagButton_Click"
+                                                    ToolTip="タグを削除">
+                                                <Button.Style>
+                                                    <Style TargetType="{x:Type Button}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding CanRemove}" Value="False">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <TextBox x:Name="NewTagTextBox"
+                             Width="240"
+                             HorizontalAlignment="Left"
+                             VerticalContentAlignment="Center"
+                             Visibility="Collapsed"
+                             ToolTip="追加するタグを入力"
+                             KeyDown="NewTagTextBox_KeyDown" />
+                </Grid>
+                <Button x:Name="AddTagButton"
+                        Grid.Column="2"
                         Width="32"
                         Height="30"
                         Margin="8,0,0,0"
@@ -235,17 +312,9 @@
                         Content="+"
                         FontSize="19"
                         IsEnabled="False"
+                        Click="AddTagButton_Click"
                         ToolTip="タグを追加" />
-                <TextBlock DockPanel.Dock="Left"
-                           Margin="0,0,12,0"
-                           VerticalAlignment="Center"
-                           FontWeight="SemiBold"
-                           Foreground="#46505D"
-                           Text="選択中のタグ" />
-                <TextBlock VerticalAlignment="Center"
-                           Foreground="{StaticResource MutedBrush}"
-                           Text="ファイルを選択するとタグがここに表示されます" />
-            </DockPanel>
+            </Grid>
         </Border>
 
         <Grid Grid.Row="3" Margin="12,10,12,10">
@@ -320,6 +389,7 @@
                                   MouseDoubleClick="ResultsListView_MouseDoubleClick"
                                   PreviewMouseRightButtonDown="ResultsListView_PreviewMouseRightButtonDown"
                                   ContextMenuOpening="ResultsListView_ContextMenuOpening"
+                                  SelectionChanged="ResultsListView_SelectionChanged"
                                   GridViewColumnHeader.Click="ResultsListView_ColumnHeaderClick">
                             <ListView.ContextMenu>
                                 <ContextMenu>

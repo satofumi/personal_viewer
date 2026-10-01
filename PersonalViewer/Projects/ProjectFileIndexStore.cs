@@ -63,6 +63,51 @@ public sealed class ProjectFileIndexStore
         File.Move(temporaryPath, indexPath, overwrite: true);
     }
 
+    public IReadOnlyList<string> LoadTags(ProjectInfo project, string filePath)
+    {
+        var normalizedPath = NormalizeFilePath(filePath);
+        var file = Load(project).FirstOrDefault(indexedFile =>
+            StringComparer.OrdinalIgnoreCase.Equals(indexedFile.Path, normalizedPath));
+        return file?.Tags.ToArray() ?? [];
+    }
+
+    public void SaveTags(ProjectInfo project, string filePath, IEnumerable<string> tags)
+    {
+        ArgumentNullException.ThrowIfNull(tags);
+
+        SaveTags(project, new Dictionary<string, IEnumerable<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [filePath] = tags
+        });
+    }
+
+    public void SaveTags(ProjectInfo project, IReadOnlyDictionary<string, IEnumerable<string>> tagsByFilePath)
+    {
+        ArgumentNullException.ThrowIfNull(tagsByFilePath);
+
+        var normalizedTagsByPath = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (filePath, tags) in tagsByFilePath)
+        {
+            ArgumentNullException.ThrowIfNull(tags);
+            normalizedTagsByPath[NormalizeFilePath(filePath)] = NormalizeTags(tags);
+        }
+
+        var files = Load(project).ToList();
+        var filesByPath = files.ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
+        var missingPath = normalizedTagsByPath.Keys.FirstOrDefault(path => !filesByPath.ContainsKey(path));
+        if (missingPath is not null)
+        {
+            throw new ProjectFileIndexException($"タグの保存対象がファイル索引にありません: {missingPath}");
+        }
+
+        foreach (var (path, tags) in normalizedTagsByPath)
+        {
+            filesByPath[path].Tags = tags;
+        }
+
+        Save(project, files);
+    }
+
     private static string GetIndexPath(ProjectInfo project)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -76,6 +121,16 @@ public sealed class ProjectFileIndexStore
             "Projects",
             parsedProjectId.ToString("N"),
             "files.yaml");
+    }
+
+    private static string NormalizeFilePath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !Path.IsPathFullyQualified(filePath))
+        {
+            throw new ProjectFileIndexException("タグの対象ファイルには絶対パスが必要です。");
+        }
+
+        return Path.GetFullPath(filePath);
     }
 
     private static IReadOnlyList<IndexedFile> Normalize(IEnumerable<IndexedFile>? files, string indexPath)
