@@ -34,6 +34,7 @@ public static class SettingsStore
           - ".tiff"
           - ".webp"
     last_view_mode: details
+    thumbnail_sort_order: name
     """;
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
@@ -101,6 +102,17 @@ public static class SettingsStore
         }
 
         WriteScalarSetting("last_view_mode", normalizedViewMode);
+    }
+
+    public static void SaveThumbnailSortOrder(string sortOrder)
+    {
+        var normalizedSortOrder = sortOrder?.Trim().ToLowerInvariant();
+        if (normalizedSortOrder is not ("name" or "last_modified"))
+        {
+            throw new ArgumentException("サムネイルの並び順は name または last_modified にしてください。", nameof(sortOrder));
+        }
+
+        WriteScalarSetting("thumbnail_sort_order", normalizedSortOrder);
     }
 
     public static void SaveWindowBounds(double left, double top, double width, double height)
@@ -201,6 +213,10 @@ public static class SettingsStore
         settings.LastViewMode = string.Equals(settings.LastViewMode?.Trim(), "thumbnails", StringComparison.OrdinalIgnoreCase)
             ? "thumbnails"
             : "details";
+
+        settings.ThumbnailSortOrder = string.Equals(settings.ThumbnailSortOrder?.Trim(), "last_modified", StringComparison.OrdinalIgnoreCase)
+            ? "last_modified"
+            : "name";
 
         if (!HasValidWindowBounds(settings))
         {

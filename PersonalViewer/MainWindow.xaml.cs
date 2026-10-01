@@ -38,6 +38,8 @@ public partial class MainWindow : Window
     private SearchMode _searchMode;
     private ResultSortColumn _sortColumn = ResultSortColumn.FileName;
     private bool _sortAscending = true;
+    private ThumbnailSortOrder _thumbnailSortOrder = ThumbnailSortOrder.FileName;
+    private bool _suppressThumbnailSortSave = true;
     private bool _showThumbnailView;
     private bool _isTagInputVisible;
     private CancellationTokenSource? _thumbnailLoadCancellation;
@@ -51,6 +53,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         UpdateSortHeaders();
         var app = (App)Application.Current;
+        _thumbnailSortOrder = string.Equals(app.Settings.ThumbnailSortOrder, "last_modified", StringComparison.OrdinalIgnoreCase)
+            ? ThumbnailSortOrder.LastModified
+            : ThumbnailSortOrder.FileName;
+        _suppressThumbnailSortSave = true;
+        ThumbnailSortComboBox.SelectedIndex = _thumbnailSortOrder == ThumbnailSortOrder.LastModified ? 1 : 0;
+        _suppressThumbnailSortSave = false;
         RestoreWindowBounds(app.Settings);
         SetResultsView(details: !string.Equals(app.Settings.LastViewMode, "thumbnails", StringComparison.Ordinal));
         _statusMessageTimer.Tick += StatusMessageTimer_Tick;
@@ -482,7 +490,7 @@ public partial class MainWindow : Window
 
     private void SetSearchResults(IReadOnlyCollection<SearchResultItem> results, string emptyMessage)
     {
-        var sortedResults = SortSearchResults(results);
+        var sortedResults = SortResultsForCurrentView(results);
         ResultsListView.SelectedItems.Clear();
         ResultsListView.ItemsSource = sortedResults;
         ResultCountText.Text = $"{results.Count} 件";
@@ -741,6 +749,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private static void SaveThumbnailSortOrder(ThumbnailSortOrder sortOrder)
+    {
+        var settingValue = sortOrder == ThumbnailSortOrder.LastModified ? "last_modified" : "name";
+        var app = (App)Application.Current;
+        app.Settings.ThumbnailSortOrder = settingValue;
+        try
+        {
+            SettingsStore.SaveThumbnailSortOrder(settingValue);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SettingsFileException)
+        {
+            MessageBox.Show(
+                $"サムネイルの並び順を保存できませんでした。{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
     private void SetResultsView(bool details)
     {
         _showThumbnailView = !details;
@@ -753,14 +780,68 @@ public partial class MainWindow : Window
         ResultsListView.ItemsPanel = details
             ? (ItemsPanelTemplate)FindResource("ResultsItemsPanelTemplate")
             : (ItemsPanelTemplate)FindResource("ThumbnailItemsPanelTemplate");
+        ThumbnailSortPanel.Visibility = details ? Visibility.Collapsed : Visibility.Visible;
 
-        if (details)
+        if (ResultsListView.ItemsSource is IReadOnlyCollection<SearchResultItem> currentResults)
+        {
+            var selectedPaths = ResultsListView.SelectedItems
+                .OfType<SearchResultItem>()
+                .Select(result => result.File.Path)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var sortedResults = details
+                ? SortSearchResults(currentResults)
+                : SortThumbnailResults(currentResults);
+            ResultsListView.ItemsSource = sortedResults;
+            foreach (var result in sortedResults.Where(result => selectedPaths.Contains(result.File.Path)))
+            {
+                ResultsListView.SelectedItems.Add(result);
+            }
+
+            if (details)
+            {
+                CancelThumbnailLoading();
+            }
+            else
+            {
+                LoadThumbnails(sortedResults);
+            }
+        }
+        else if (details)
         {
             CancelThumbnailLoading();
         }
-        else if (ResultsListView.ItemsSource is IReadOnlyCollection<SearchResultItem> results)
+    }
+
+    private void ThumbnailSortComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ThumbnailSortComboBox.SelectedIndex is < 0 or > 1)
         {
-            LoadThumbnails(results);
+            return;
+        }
+
+        _thumbnailSortOrder = ThumbnailSortComboBox.SelectedIndex == 0
+            ? ThumbnailSortOrder.FileName
+            : ThumbnailSortOrder.LastModified;
+        if (!_suppressThumbnailSortSave)
+        {
+            SaveThumbnailSortOrder(_thumbnailSortOrder);
+        }
+
+        if (!_showThumbnailView
+            || ResultsListView.ItemsSource is not IReadOnlyCollection<SearchResultItem> results)
+        {
+            return;
+        }
+
+        var selectedPaths = ResultsListView.SelectedItems
+            .OfType<SearchResultItem>()
+            .Select(result => result.File.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sortedResults = SortThumbnailResults(results);
+        ResultsListView.ItemsSource = sortedResults;
+        foreach (var result in sortedResults.Where(result => selectedPaths.Contains(result.File.Path)))
+        {
+            ResultsListView.SelectedItems.Add(result);
         }
     }
 
@@ -963,6 +1044,27 @@ public partial class MainWindow : Window
         }
     }
 
+    private IReadOnlyCollection<SearchResultItem> SortResultsForCurrentView(IEnumerable<SearchResultItem> results)
+    {
+        return _showThumbnailView
+            ? SortThumbnailResults(results)
+            : SortSearchResults(results);
+    }
+
+    private IReadOnlyCollection<SearchResultItem> SortThumbnailResults(IEnumerable<SearchResultItem> results)
+    {
+        IOrderedEnumerable<SearchResultItem> sorted = _thumbnailSortOrder switch
+        {
+            ThumbnailSortOrder.FileName => results.OrderBy(result => result.FileName, StringComparer.OrdinalIgnoreCase),
+            ThumbnailSortOrder.LastModified => results.OrderBy(result => result.File.LastModifiedUtc),
+            _ => results.OrderBy(result => result.FileName, StringComparer.OrdinalIgnoreCase)
+        };
+
+        return sorted
+            .ThenBy(result => result.File.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     private IReadOnlyCollection<SearchResultItem> SortSearchResults(IEnumerable<SearchResultItem> results)
     {
         IOrderedEnumerable<SearchResultItem> sorted = _sortColumn switch
@@ -1112,7 +1214,7 @@ public partial class MainWindow : Window
 
     private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        var version = typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "不明";
+        var version = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "不明";
         MessageBox.Show(
             this,
             $"Personal Viewer{Environment.NewLine}Version {version}",
@@ -1362,6 +1464,12 @@ public partial class MainWindow : Window
         LastModified,
         FileType,
         Size
+    }
+
+    private enum ThumbnailSortOrder
+    {
+        FileName,
+        LastModified
     }
 
     private sealed record FolderTreeNode(string FullPath, string RootPath, bool HasSubfolders);

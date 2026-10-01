@@ -8,6 +8,8 @@ public sealed class AppSettings
 
     public string LastViewMode { get; set; } = "details";
 
+    public string ThumbnailSortOrder { get; set; } = "name";
+
     public double? WindowLeft { get; set; }
 
     public double? WindowTop { get; set; }

@@ -367,16 +367,43 @@
                             Padding="12,10"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="0,0,0,1">
-                        <DockPanel>
-                            <TextBlock FontWeight="SemiBold"
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       FontWeight="SemiBold"
                                        Foreground="#303844"
                                        Text="検索結果" />
-                            <TextBlock x:Name="ResultCountText"
-                                       DockPanel.Dock="Right"
-                                       Margin="12,0,0,0"
-                                       Foreground="{StaticResource MutedBrush}"
-                                       Text="0 件" />
-                        </DockPanel>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <TextBlock x:Name="ResultCountText"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           Text="0 件" />
+                                <StackPanel x:Name="ThumbnailSortPanel"
+                                            Margin="14,0,0,0"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center"
+                                            Visibility="Collapsed">
+                                    <TextBlock Margin="0,0,6,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               Text="並び順" />
+                                    <ComboBox x:Name="ThumbnailSortComboBox"
+                                              Width="172"
+                                              Height="28"
+                                              VerticalContentAlignment="Center"
+                                              SelectionChanged="ThumbnailSortComboBox_SelectionChanged"
+                                              ToolTip="サムネイル表示の並び順">
+                                        <ComboBoxItem Content="名前（昇順）" />
+                                        <ComboBoxItem Content="更新日時（古い順）" />
+                                    </ComboBox>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
                     </Border>
                     <Grid>
                         <ListView x:Name="ResultsListView"

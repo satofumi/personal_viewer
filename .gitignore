@@ -8,3 +8,7 @@
 *.user
 *.userosscache
 *.sln.docstates
+
+# Visual Studio Installer Projects output
+PersonalViewer.Setup/Debug/
+PersonalViewer.Setup/Release/
