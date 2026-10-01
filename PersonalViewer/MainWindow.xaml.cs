@@ -23,10 +23,13 @@ public partial class MainWindow : Window
         Interval = StatusMessageDuration
     };
     private readonly MediaFileScanner _mediaFileScanner = new();
+    private readonly ProjectFileIndexStore _projectFileIndexStore = new();
     private readonly ProjectFileIndexUpdater _projectFileIndexUpdater = new(new ProjectFileIndexStore(), new UnknownFileStore());
     private IReadOnlyList<ProjectInfo> _projects = [];
     private bool _suppressProjectSelectionChanged;
+    private bool _settingFolderSearchText;
     private bool _scanInProgress;
+    private SearchMode _searchMode;
 
     public ProjectInfo? CurrentProject { get; private set; }
 
@@ -206,8 +209,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        SearchTextBox.Text = GetFolderSearchText(folderNode);
-        SearchTextBox.CaretIndex = SearchTextBox.Text.Length;
+        _settingFolderSearchText = true;
+        try
+        {
+            SearchTextBox.Text = GetFolderSearchText(folderNode);
+            SearchTextBox.CaretIndex = SearchTextBox.Text.Length;
+        }
+        finally
+        {
+            _settingFolderSearchText = false;
+        }
     }
 
     private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -215,6 +226,71 @@ public partial class MainWindow : Window
         SearchPlaceholderText.Visibility = string.IsNullOrEmpty(SearchTextBox.Text)
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+        if (string.IsNullOrEmpty(SearchTextBox.Text))
+        {
+            _searchMode = SearchMode.Empty;
+        }
+        else if (_settingFolderSearchText
+                 && FolderTreeView.SelectedItem is TreeViewItem { Tag: FolderTreeNode })
+        {
+            _searchMode = SearchMode.Folder;
+        }
+        else
+        {
+            _searchMode = SearchMode.Keyword;
+        }
+
+        switch (_searchMode)
+        {
+            case SearchMode.Empty:
+                SetSearchResults([], "検索欄にキーワードを入力するか、フォルダーを選択してください");
+                break;
+            case SearchMode.Folder when FolderTreeView.SelectedItem is TreeViewItem { Tag: FolderTreeNode folderNode }:
+                ShowFolderResults(folderNode);
+                break;
+            case SearchMode.Keyword:
+                SetSearchResults([], "キーワード検索結果はここに表示されます");
+                break;
+        }
+    }
+
+    private void ShowFolderResults(FolderTreeNode folderNode)
+    {
+        if (CurrentProject is null)
+        {
+            SetSearchResults([], "プロジェクトを選択してください");
+            return;
+        }
+
+        try
+        {
+            var folderPath = Path.GetFullPath(folderNode.FullPath);
+            var results = _projectFileIndexStore.Load(CurrentProject)
+                .Where(file => StringComparer.OrdinalIgnoreCase.Equals(Path.GetDirectoryName(file.Path), folderPath))
+                .OrderBy(file => Path.GetFileName(file.Path), StringComparer.OrdinalIgnoreCase)
+                .Select(file => new SearchResultItem(file, Path.GetFileName(file.Path)))
+                .ToArray();
+            SetSearchResults(results, $"フォルダー「{Path.GetFileName(folderPath)}」に表示できるファイルはありません");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
+        {
+            SetSearchResults([], "ファイル一覧を読み込めませんでした");
+            MessageBox.Show(
+                this,
+                $"ファイル一覧を読み込めませんでした。{Environment.NewLine}{exception.Message}",
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void SetSearchResults(IReadOnlyCollection<SearchResultItem> results, string emptyMessage)
+    {
+        ResultsListView.ItemsSource = results;
+        ResultCountText.Text = $"{results.Count} 件";
+        ResultEmptyText.Text = emptyMessage;
+        ResultEmptyText.Visibility = results.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static string GetFolderSearchText(FolderTreeNode folderNode)
@@ -561,5 +637,14 @@ public partial class MainWindow : Window
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath));
     }
 
+    private enum SearchMode
+    {
+        Empty,
+        Folder,
+        Keyword
+    }
+
     private sealed record FolderTreeNode(string FullPath, string RootPath, bool HasSubfolders);
+
+    private sealed record SearchResultItem(IndexedFile File, string FileName);
 }

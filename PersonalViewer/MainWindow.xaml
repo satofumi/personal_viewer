@@ -243,18 +243,28 @@
                             <TextBlock FontWeight="SemiBold"
                                        Foreground="#303844"
                                        Text="検索結果" />
-                            <TextBlock DockPanel.Dock="Right"
+                            <TextBlock x:Name="ResultCountText"
+                                       DockPanel.Dock="Right"
                                        Margin="12,0,0,0"
                                        Foreground="{StaticResource MutedBrush}"
                                        Text="0 件" />
                         </DockPanel>
                     </Border>
                     <Grid>
-                        <ListView Margin="6"
+                        <ListView x:Name="ResultsListView"
+                                  Margin="6"
                                   Background="Transparent"
                                   BorderThickness="0"
-                                  SelectionMode="Extended" />
-                        <TextBlock Margin="24"
+                                  SelectionMode="Extended">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding FileName}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                        <TextBlock x:Name="ResultEmptyText"
+                                   Margin="24"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    TextAlignment="Center"
