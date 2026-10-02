@@ -62,6 +62,8 @@
   "FileOpenErrorDetails": "Could not open the file.\n{0}\n\n{1}",
   "FileNotFoundRescanDetails": "The file could not be found. Rescan the folder.\n{0}",
   "ExplorerOpenErrorDetails": "Could not show the file in Explorer.\n{0}\n\n{1}",
+  "FolderNotFoundRescanDetails": "The folder could not be found. Rescan the folder.\n{0}",
+  "FolderExplorerOpenErrorDetails": "Could not show the folder in Explorer.\n{0}\n\n{1}",
   "SubfolderLoadError": "Could not load subfolders: {0}",
   "SaveLastProjectErrorDetails": "Could not save the previously selected project.\n{0}",
   "VersionUnknown": "Unknown",

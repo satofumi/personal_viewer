@@ -286,14 +286,23 @@ public partial class MainWindow : Window
             Header = CreateFolderHeader(folderName),
             Tag = folderNode
         };
+        var showInExplorerMenuItem = new MenuItem
+        {
+            Header = LocalizationService.GetString("ShowInExplorer"),
+            Tag = folderNode
+        };
+        showInExplorerMenuItem.Click += FolderShowInExplorerMenuItem_Click;
         var rescanMenuItem = new MenuItem
         {
             Header = LocalizationService.GetString("Rescan"),
             Tag = folderNode
         };
         rescanMenuItem.Click += RescanFolderMenuItem_Click;
-        item.ContextMenu = new ContextMenu();
-        item.ContextMenu.Items.Add(rescanMenuItem);
+        var contextMenu = new ContextMenu();
+        contextMenu.Items.Add(showInExplorerMenuItem);
+        contextMenu.Items.Add(new Separator());
+        contextMenu.Items.Add(rescanMenuItem);
+        item.ContextMenu = contextMenu;
         item.PreviewMouseRightButtonDown += FolderTreeItem_PreviewMouseRightButtonDown;
         if (folderNode.HasSubfolders)
         {
@@ -1072,6 +1081,46 @@ public partial class MainWindow : Window
             MessageBox.Show(
                 this,
                 LocalizationService.Format("ExplorerOpenErrorDetails", result.File.Path, exception.Message),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void FolderShowInExplorerMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: FolderTreeNode folderNode })
+        {
+            return;
+        }
+
+        var folderPath = folderNode.FullPath;
+        if (!Directory.Exists(folderPath))
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FolderNotFoundRescanDetails", folderPath),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                UseShellExecute = true
+            };
+            startInfo.ArgumentList.Add(folderPath);
+            Process.Start(startInfo);
+        }
+        catch (Exception exception) when (exception is Win32Exception or IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException or ArgumentException)
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FolderExplorerOpenErrorDetails", folderPath, exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

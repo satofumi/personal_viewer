@@ -62,6 +62,8 @@
   "FileOpenErrorDetails": "ファイルを開けませんでした。\n{0}\n\n{1}",
   "FileNotFoundRescanDetails": "ファイルが見つかりません。再スキャンしてください。\n{0}",
   "ExplorerOpenErrorDetails": "エクスプローラーでファイルを表示できませんでした。\n{0}\n\n{1}",
+  "FolderNotFoundRescanDetails": "フォルダーが見つかりません。再スキャンしてください。\n{0}",
+  "FolderExplorerOpenErrorDetails": "エクスプローラーでフォルダーを開けませんでした。\n{0}\n\n{1}",
   "SubfolderLoadError": "サブフォルダーを読み込めませんでした: {0}",
   "SaveLastProjectErrorDetails": "前回選択したプロジェクトを保存できませんでした。\n{0}",
   "VersionUnknown": "不明",

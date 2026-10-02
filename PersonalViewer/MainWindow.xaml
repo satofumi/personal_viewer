@@ -76,10 +76,9 @@
         </ItemsPanelTemplate>
 
         <DataTemplate x:Key="ThumbnailResultTemplate">
-            <Border Width="144"
-                    Height="124"
-                    Margin="3"
-                    Padding="6"
+            <Border Width="136"
+                    Margin="2"
+                    Padding="4"
                     Background="White"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1"
@@ -87,37 +86,42 @@
                 <DockPanel LastChildFill="True">
                     <TextBlock DockPanel.Dock="Bottom"
                                MaxHeight="36"
-                               Margin="0,4,0,0"
+                               Margin="0,3,0,0"
                                Text="{Binding FileName}"
                                TextAlignment="Center"
                                TextTrimming="CharacterEllipsis"
                                TextWrapping="Wrap"
                                ToolTip="{Binding FileName}" />
-                    <Grid Width="128"
-                          Height="72"
-                          Background="#F3F5F8">
-                        <Image MaxWidth="96"
-                               MaxHeight="96"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               Source="{Binding Thumbnail}"
-                               Stretch="Uniform" />
-                        <TextBlock HorizontalAlignment="Center"
+                    <Border HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Padding="1"
+                            Background="#F3F5F8"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1">
+                        <Grid MinWidth="96" MinHeight="54">
+                            <Image MaxWidth="96"
+                                   MaxHeight="96"
+                                   HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
-                                   Foreground="{StaticResource MutedBrush}"
-                                   Text="{loc:Loc NoThumbnail}">
-                            <TextBlock.Style>
-                                <Style TargetType="{x:Type TextBlock}">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </Grid>
+                                   Source="{Binding Thumbnail}"
+                                   Stretch="Uniform" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       Text="{loc:Loc NoThumbnail}">
+                                <TextBlock.Style>
+                                    <Style TargetType="{x:Type TextBlock}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </Border>
                 </DockPanel>
             </Border>
         </DataTemplate>
