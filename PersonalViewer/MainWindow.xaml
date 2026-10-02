@@ -428,6 +428,10 @@
                                 <ContextMenu>
                                     <MenuItem Header="{loc:Loc ShowInExplorer}"
                                               Click="ShowInExplorerMenuItem_Click" />
+                                    <Separator Tag="ThumbnailReselectSeparator" />
+                                    <MenuItem Tag="ThumbnailReselect"
+                                              Header="{loc:Loc ThumbnailReselect}"
+                                              Click="ThumbnailReselectMenuItem_Click" />
                                 </ContextMenu>
                             </ListView.ContextMenu>
                             <ListView.View>

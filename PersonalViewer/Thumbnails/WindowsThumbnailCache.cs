@@ -1,8 +1,10 @@
 using System.IO;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -29,6 +31,41 @@ public sealed class WindowsThumbnailCache
         try
         {
             return await Task.Run(() => GetThumbnail(file, allowFfmpegFallback, cancellationToken), cancellationToken);
+        }
+        finally
+        {
+            _generationSemaphore.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<ThumbnailCandidate>> GenerateVideoCandidatesAsync(
+        IndexedFile file,
+        CancellationToken cancellationToken)
+    {
+        await _generationSemaphore.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(
+                () => GenerateVideoCandidates(file.Path, cancellationToken),
+                cancellationToken);
+        }
+        finally
+        {
+            _generationSemaphore.Release();
+        }
+    }
+
+    public async Task SaveThumbnailAsync(
+        IndexedFile file,
+        byte[] thumbnailData,
+        CancellationToken cancellationToken)
+    {
+        await _generationSemaphore.WaitAsync(cancellationToken);
+        try
+        {
+            await Task.Run(
+                () => SaveThumbnail(GetCachePath(file), thumbnailData, cancellationToken),
+                cancellationToken);
         }
         finally
         {
@@ -155,6 +192,151 @@ public sealed class WindowsThumbnailCache
         }
     }
 
+    private static IReadOnlyList<ThumbnailCandidate> GenerateVideoCandidates(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+            {
+                throw new FileNotFoundException("The video file could not be found.", filePath);
+            }
+
+            var duration = GetVideoDuration(filePath, cancellationToken);
+            var candidates = new List<ThumbnailCandidate>(12);
+            foreach (var second in new[] { 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233 }.Where(second => second < duration.TotalSeconds))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sampleTime = TimeSpan.FromSeconds(second);
+                var thumbnailData = GenerateFfmpegThumbnailAt(filePath, sampleTime, cancellationToken);
+                candidates.Add(new ThumbnailCandidate(sampleTime, thumbnailData));
+            }
+
+            if (candidates.Count == 0)
+            {
+                throw new InvalidDataException("The video is shorter than one second.");
+            }
+
+            return candidates;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new FfmpegThumbnailException(filePath, exception);
+        }
+    }
+
+    private static TimeSpan GetVideoDuration(string filePath, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "ffmpeg",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("-hide_banner");
+        startInfo.ArgumentList.Add("-nostdin");
+        startInfo.ArgumentList.Add("-i");
+        startInfo.ArgumentList.Add(filePath);
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("FFmpeg did not start.");
+        }
+
+        using var cancellationRegistration = cancellationToken.Register(() => TryKillProcess(process));
+        var standardErrorTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        var standardError = standardErrorTask.GetAwaiter().GetResult();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var durationMatch = Regex.Match(
+            standardError,
+            @"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)",
+            RegexOptions.CultureInvariant);
+        if (!durationMatch.Success)
+        {
+            throw new InvalidDataException("FFmpeg did not report the video duration.");
+        }
+
+        var totalSeconds =
+            int.Parse(durationMatch.Groups[1].Value, CultureInfo.InvariantCulture) * 3600
+            + int.Parse(durationMatch.Groups[2].Value, CultureInfo.InvariantCulture) * 60
+            + double.Parse(durationMatch.Groups[3].Value, CultureInfo.InvariantCulture);
+        if (totalSeconds <= 0)
+        {
+            throw new InvalidDataException("The video duration is zero.");
+        }
+
+        return TimeSpan.FromSeconds(totalSeconds);
+    }
+
+    private static byte[] GenerateFfmpegThumbnailAt(
+        string filePath,
+        TimeSpan sampleTime,
+        CancellationToken cancellationToken)
+    {
+        var temporaryPath = Path.Combine(
+            Path.GetTempPath(),
+            $"PersonalViewer-{Guid.NewGuid():N}.png");
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-hide_banner");
+            startInfo.ArgumentList.Add("-loglevel");
+            startInfo.ArgumentList.Add("error");
+            startInfo.ArgumentList.Add("-nostdin");
+            startInfo.ArgumentList.Add("-ss");
+            startInfo.ArgumentList.Add(sampleTime.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add("-i");
+            startInfo.ArgumentList.Add(filePath);
+            startInfo.ArgumentList.Add("-map");
+            startInfo.ArgumentList.Add("0:V:0");
+            startInfo.ArgumentList.Add("-frames:v");
+            startInfo.ArgumentList.Add("1");
+            startInfo.ArgumentList.Add("-an");
+            startInfo.ArgumentList.Add("-vf");
+            startInfo.ArgumentList.Add($"scale={ThumbnailSize}:{ThumbnailSize}:force_original_aspect_ratio=decrease");
+            startInfo.ArgumentList.Add("-y");
+            startInfo.ArgumentList.Add(temporaryPath);
+
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("FFmpeg did not start.");
+            }
+
+            using var cancellationRegistration = cancellationToken.Register(() => TryKillProcess(process));
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
+            process.WaitForExit();
+            var standardError = standardErrorTask.GetAwaiter().GetResult();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"FFmpeg exited with code {process.ExitCode}: {standardError.Trim()}");
+            }
+
+            return LoadCachedThumbnail(temporaryPath);
+        }
+        finally
+        {
+            TryDelete(temporaryPath);
+        }
+    }
+
     private static void TryKillProcess(Process process)
     {
         try
@@ -259,6 +441,22 @@ public sealed class WindowsThumbnailCache
         }
     }
 
+    private void SaveThumbnail(string cachePath, byte[] thumbnailData, CancellationToken cancellationToken)
+    {
+        var temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            Directory.CreateDirectory(_cacheDirectory);
+            File.WriteAllBytes(temporaryPath, thumbnailData);
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, cachePath, overwrite: true);
+        }
+        finally
+        {
+            TryDelete(temporaryPath);
+        }
+    }
+
     private static void TryDelete(string path)
     {
         try
@@ -308,6 +506,8 @@ public sealed class WindowsThumbnailCache
         ScaleUp = 0x100
     }
 }
+
+public sealed record ThumbnailCandidate(TimeSpan Time, byte[] Data);
 
 public sealed class FfmpegThumbnailException(string filePath, Exception innerException)
     : Exception($"FFmpeg could not create a thumbnail for '{filePath}'.", innerException)

@@ -1044,6 +1044,19 @@ public partial class MainWindow : Window
         if (_contextMenuTarget is null)
         {
             e.Handled = true;
+            return;
+        }
+
+        var isVideoProject = StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video");
+        if (ResultsListView.ContextMenu is { } contextMenu)
+        {
+            foreach (var item in contextMenu.Items.OfType<FrameworkElement>())
+            {
+                if (item.Tag as string is "ThumbnailReselect" or "ThumbnailReselectSeparator")
+                {
+                    item.Visibility = isVideoProject ? Visibility.Visible : Visibility.Collapsed;
+                }
+            }
         }
     }
 
@@ -1084,6 +1097,90 @@ public partial class MainWindow : Window
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
+        }
+    }
+
+    private async void ThumbnailReselectMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var result = _contextMenuTarget;
+        _contextMenuTarget = null;
+        if (result is null
+            || !StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video"))
+        {
+            return;
+        }
+
+        if (!File.Exists(result.File.Path))
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FileNotFoundRescanDetails", result.File.Path),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        var currentResults = ResultsListView.ItemsSource as IReadOnlyCollection<SearchResultItem>;
+        var resumeThumbnailLoading = _showThumbnailView && currentResults is not null;
+        if (resumeThumbnailLoading)
+        {
+            CancelThumbnailLoading();
+        }
+
+        try
+        {
+            var selectionWindow = new ThumbnailSelectionWindow(result.File, _thumbnailCache)
+            {
+                Owner = this
+            };
+            var accepted = selectionWindow.ShowDialog() == true;
+            if (selectionWindow.GenerationException is not null)
+            {
+                ShowStatusMessage(LocalizationService.Format(
+                    "FfmpegThumbnailFailure",
+                    Path.GetFileName(result.File.Path)));
+                return;
+            }
+
+            if (!accepted || selectionWindow.SelectedCandidate is not { } selectedCandidate)
+            {
+                return;
+            }
+
+            if (!File.Exists(result.File.Path))
+            {
+                MessageBox.Show(
+                    this,
+                    LocalizationService.Format("FileNotFoundRescanDetails", result.File.Path),
+                    "Personal Viewer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return;
+            }
+
+            await _thumbnailCache.SaveThumbnailAsync(
+                result.File,
+                selectedCandidate.Data,
+                CancellationToken.None);
+            result.Thumbnail = CreateThumbnail(selectedCandidate.Data);
+            ShowStatusMessage(LocalizationService.GetString("ThumbnailSaved"));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException or ArgumentException)
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("ThumbnailSaveErrorDetails", result.File.Path, exception.Message),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            if (resumeThumbnailLoading && currentResults is not null)
+            {
+                LoadThumbnails(currentResults);
+            }
         }
     }
 
