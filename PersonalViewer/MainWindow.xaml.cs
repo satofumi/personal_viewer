@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _thumbnailLoadCancellation;
     private CancellationTokenSource? _keywordSearchCancellation;
     private SearchResultItem? _contextMenuTarget;
+    private SearchResultItem[] _contextMenuPreviousSelection = [];
     private int _ffmpegThumbnailErrorNotificationShown;
 
     public ProjectInfo? CurrentProject { get; private set; }
@@ -335,6 +336,11 @@ public partial class MainWindow : Window
         {
             _settingFolderSearchText = false;
         }
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            FindVisualChild<ScrollViewer>(ResultsListView)?.ScrollToTop();
+        }), DispatcherPriority.Loaded);
     }
 
     private async void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -1022,6 +1028,7 @@ public partial class MainWindow : Window
     private void ResultsListView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         _contextMenuTarget = null;
+        _contextMenuPreviousSelection = [];
         if (e.OriginalSource is not DependencyObject source
             || ItemsControl.ContainerFromElement(ResultsListView, source) is not ListViewItem item
             || item.DataContext is not SearchResultItem result)
@@ -1030,6 +1037,9 @@ public partial class MainWindow : Window
         }
 
         _contextMenuTarget = result;
+        _contextMenuPreviousSelection = ResultsListView.SelectedItems
+            .OfType<SearchResultItem>()
+            .ToArray();
         if (!item.IsSelected)
         {
             ResultsListView.SelectedItems.Clear();
@@ -1064,6 +1074,7 @@ public partial class MainWindow : Window
     {
         var result = _contextMenuTarget;
         _contextMenuTarget = null;
+        _contextMenuPreviousSelection = [];
         if (result is null)
         {
             return;
@@ -1103,38 +1114,67 @@ public partial class MainWindow : Window
     private async void ThumbnailReselectMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var result = _contextMenuTarget;
+        var previousSelection = _contextMenuPreviousSelection;
         _contextMenuTarget = null;
-        if (result is null
-            || !StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video"))
+        _contextMenuPreviousSelection = [];
+        var shouldRestoreSelection = result is not null;
+        var selectionRestored = false;
+
+        void RestorePreviousSelection()
         {
-            return;
+            if (!shouldRestoreSelection || selectionRestored)
+            {
+                return;
+            }
+
+            ResultsListView.SelectedItems.Clear();
+            foreach (var selectedResult in previousSelection)
+            {
+                if (!ReferenceEquals(selectedResult, result)
+                    && ResultsListView.Items.Contains(selectedResult))
+                {
+                    ResultsListView.SelectedItems.Add(selectedResult);
+                }
+            }
+
+            selectionRestored = true;
         }
 
-        if (!File.Exists(result.File.Path))
-        {
-            MessageBox.Show(
-                this,
-                LocalizationService.Format("FileNotFoundRescanDetails", result.File.Path),
-                "Personal Viewer",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-            return;
-        }
-
-        var currentResults = ResultsListView.ItemsSource as IReadOnlyCollection<SearchResultItem>;
-        var resumeThumbnailLoading = _showThumbnailView && currentResults is not null;
-        if (resumeThumbnailLoading)
-        {
-            CancelThumbnailLoading();
-        }
+        IReadOnlyCollection<SearchResultItem>? currentResults = null;
+        var resumeThumbnailLoading = false;
 
         try
         {
+            if (result is null
+                || !StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video"))
+            {
+                return;
+            }
+
+            if (!File.Exists(result.File.Path))
+            {
+                MessageBox.Show(
+                    this,
+                    LocalizationService.Format("FileNotFoundRescanDetails", result.File.Path),
+                    "Personal Viewer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                return;
+            }
+
+            currentResults = ResultsListView.ItemsSource as IReadOnlyCollection<SearchResultItem>;
+            resumeThumbnailLoading = _showThumbnailView && currentResults is not null;
+            if (resumeThumbnailLoading)
+            {
+                CancelThumbnailLoading();
+            }
+
             var selectionWindow = new ThumbnailSelectionWindow(result.File, _thumbnailCache)
             {
                 Owner = this
             };
             var accepted = selectionWindow.ShowDialog() == true;
+            await Dispatcher.InvokeAsync(RestorePreviousSelection, DispatcherPriority.ContextIdle);
             if (selectionWindow.GenerationException is not null)
             {
                 ShowStatusMessage(LocalizationService.Format(
@@ -1170,13 +1210,14 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(
                 this,
-                LocalizationService.Format("ThumbnailSaveErrorDetails", result.File.Path, exception.Message),
+                LocalizationService.Format("ThumbnailSaveErrorDetails", result?.File.Path ?? string.Empty, exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
         finally
         {
+            await Dispatcher.InvokeAsync(RestorePreviousSelection, DispatcherPriority.ContextIdle);
             if (resumeThumbnailLoading && currentResults is not null)
             {
                 LoadThumbnails(currentResults);
@@ -1284,6 +1325,26 @@ public partial class MainWindow : Window
             ? rootName
             : Path.Combine(rootName, relativePath);
         return $":folder:{projectRelativePath}";
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T target)
+            {
+                return target;
+            }
+
+            var descendant = FindVisualChild<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     private void FolderTreeItem_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
