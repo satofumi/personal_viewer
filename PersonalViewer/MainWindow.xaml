@@ -363,7 +363,10 @@
                 </DockPanel>
             </Border>
 
-            <Border Grid.Column="2"
+            <Border x:Name="ResultsPanel"
+                    Grid.Column="2"
+                    Focusable="True"
+                    PreviewMouseLeftButtonDown="ResultsPanel_PreviewMouseLeftButtonDown"
                     Background="White"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1"
@@ -411,7 +414,7 @@
                             </StackPanel>
                         </Grid>
                     </Border>
-                    <Grid>
+                    <Grid Background="Transparent">
                         <ListView x:Name="ResultsListView"
                                   Margin="6"
                                   Background="Transparent"
@@ -419,6 +422,7 @@
                                   ItemsPanel="{StaticResource ResultsItemsPanelTemplate}"
                                   SelectionMode="Extended"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  PreviewKeyDown="ResultsListView_PreviewKeyDown"
                                   MouseDoubleClick="ResultsListView_MouseDoubleClick"
                                   PreviewMouseRightButtonDown="ResultsListView_PreviewMouseRightButtonDown"
                                   ContextMenuOpening="ResultsListView_ContextMenuOpening"
@@ -426,6 +430,8 @@
                                   GridViewColumnHeader.Click="ResultsListView_ColumnHeaderClick">
                             <ListView.ContextMenu>
                                 <ContextMenu>
+                                    <MenuItem Header="{loc:Loc ShowInApp}"
+                                              Click="ShowInAppMenuItem_Click" />
                                     <MenuItem Header="{loc:Loc ShowInExplorer}"
                                               Click="ShowInExplorerMenuItem_Click" />
                                     <Separator Tag="ThumbnailReselectSeparator" />

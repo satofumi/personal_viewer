@@ -10,6 +10,7 @@ using System.Diagnostics;
 using Microsoft.Win32;
 using System.ComponentModel;
 using PersonalViewer.Configuration;
+using PersonalViewer.Diagnostics;
 using PersonalViewer.Localization;
 using PersonalViewer.Projects;
 using PersonalViewer.Thumbnails;
@@ -22,6 +23,7 @@ public partial class MainWindow : Window
     private static readonly object LazyChildPlaceholder = new();
     private static readonly TimeSpan StatusMessageDuration = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan KeywordSearchDebounceDuration = TimeSpan.FromMilliseconds(180);
+    private const int ThumbnailLoadConcurrency = 2;
 
     private readonly ProjectStore _projectStore = new();
     private readonly DispatcherTimer _statusMessageTimer = new()
@@ -48,6 +50,7 @@ public partial class MainWindow : Window
     private SearchResultItem? _contextMenuTarget;
     private SearchResultItem[] _contextMenuPreviousSelection = [];
     private int _ffmpegThumbnailErrorNotificationShown;
+    private int _resultsSelectionVersion;
 
     public ProjectInfo? CurrentProject { get; private set; }
 
@@ -326,6 +329,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        var searchTextChanged = !StringComparer.Ordinal.Equals(SearchTextBox.Text, GetFolderSearchText(folderNode));
         _settingFolderSearchText = true;
         try
         {
@@ -337,10 +341,22 @@ public partial class MainWindow : Window
             _settingFolderSearchText = false;
         }
 
+        if (!searchTextChanged)
+        {
+            RefreshFolderResults(folderNode);
+        }
+
         Dispatcher.BeginInvoke(new Action(() =>
         {
             FindVisualChild<ScrollViewer>(ResultsListView)?.ScrollToTop();
         }), DispatcherPriority.Loaded);
+    }
+
+    private void RefreshFolderResults(FolderTreeNode folderNode)
+    {
+        CancelKeywordSearch();
+        _searchMode = SearchMode.Folder;
+        ShowFolderResults(folderNode);
     }
 
     private async void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -530,6 +546,7 @@ public partial class MainWindow : Window
 
     private void ResultsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        _resultsSelectionVersion++;
         SetTagInputVisible(visible: false);
         RefreshSelectedTagsPanel();
     }
@@ -874,13 +891,41 @@ public partial class MainWindow : Window
     private void LoadThumbnails(IEnumerable<SearchResultItem> results)
     {
         CancelThumbnailLoading();
+        var pendingResults = results.Where(result => result.Thumbnail is null).ToArray();
+        if (pendingResults.Length == 0)
+        {
+            return;
+        }
+
         var cancellationSource = new CancellationTokenSource();
         _thumbnailLoadCancellation = cancellationSource;
         Interlocked.Exchange(ref _ffmpegThumbnailErrorNotificationShown, 0);
         var allowFfmpegFallback = StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video");
-        foreach (var result in results)
+        _ = LoadThumbnailsAsync(pendingResults, allowFfmpegFallback, cancellationSource.Token);
+    }
+
+    private async Task LoadThumbnailsAsync(
+        SearchResultItem[] results,
+        bool allowFfmpegFallback,
+        CancellationToken cancellationToken)
+    {
+        try
         {
-            _ = LoadThumbnailAsync(result, allowFfmpegFallback, cancellationSource.Token);
+            await Parallel.ForEachAsync(
+                results,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = ThumbnailLoadConcurrency,
+                    CancellationToken = cancellationToken
+                },
+                async (result, token) => await LoadThumbnailAsync(result, allowFfmpegFallback, token));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("thumbnail-batch", exception, $"items={results.Length}");
         }
     }
 
@@ -902,6 +947,7 @@ public partial class MainWindow : Window
         }
         catch (FfmpegThumbnailException exception) when (!cancellationToken.IsCancellationRequested)
         {
+            AppLogger.ErrorLimited("thumbnail-ffmpeg", exception, $"file={Path.GetFileName(exception.FilePath)}");
             if (Interlocked.Exchange(ref _ffmpegThumbnailErrorNotificationShown, 1) == 0)
             {
                 await Dispatcher.InvokeAsync(() =>
@@ -915,9 +961,13 @@ public partial class MainWindow : Window
                 }, DispatcherPriority.Background);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             // A single file without an available thumbnail should not prevent other results from appearing.
+            AppLogger.ErrorLimited(
+                "thumbnail-load",
+                exception,
+                $"file={Path.GetFileName(result.File.Path)}; canceled={cancellationToken.IsCancellationRequested}");
         }
     }
 
@@ -996,6 +1046,69 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ResultsPanel_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source
+            || IsWithinVisualTree<GridViewColumnHeader>(source)
+            || IsWithinVisualTree<ComboBox>(source)
+            || IsWithinVisualTree<System.Windows.Controls.Primitives.ScrollBar>(source)
+            || ItemsControl.ContainerFromElement(ResultsListView, source) is ListViewItem
+            || ResultsListView.SelectedItems.Count == 0)
+        {
+            return;
+        }
+
+        ClearResultsSelection();
+        e.Handled = true;
+    }
+
+    private void ClearResultsSelection()
+    {
+        ClearSelectedResultContainers();
+        ResultsListView.SelectedItems.Clear();
+        ResultsListView.SelectedItem = null;
+        ResultsPanel.Focus();
+
+        var selectionVersion = _resultsSelectionVersion;
+        // Apply the clear again after WPF finishes processing the current mouse input.
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (_resultsSelectionVersion != selectionVersion)
+            {
+                return;
+            }
+
+            ClearSelectedResultContainers();
+            ResultsListView.SelectedItems.Clear();
+            ResultsListView.SelectedItem = null;
+        }));
+    }
+
+    private void ClearSelectedResultContainers()
+    {
+        var selectedResults = ResultsListView.SelectedItems
+            .OfType<SearchResultItem>()
+            .ToArray();
+        foreach (var result in selectedResults)
+        {
+            if (ResultsListView.ItemContainerGenerator.ContainerFromItem(result) is ListViewItem item)
+            {
+                item.IsSelected = false;
+            }
+        }
+    }
+
+    private void ResultsListView_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || ResultsListView.SelectedItems.Count == 0)
+        {
+            return;
+        }
+
+        ClearResultsSelection();
+        e.Handled = true;
+    }
+
     private void ResultsListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource is not DependencyObject source
@@ -1070,6 +1183,162 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ShowInAppMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var result = _contextMenuTarget;
+        _contextMenuTarget = null;
+        _contextMenuPreviousSelection = [];
+        if (result is null || CurrentProject is null)
+        {
+            return;
+        }
+
+        if (!File.Exists(result.File.Path))
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FileNotFoundRescanDetails", result.File.Path),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        var parentFolder = Path.GetDirectoryName(Path.GetFullPath(result.File.Path));
+        if (parentFolder is null || !TrySelectFolderInTree(parentFolder, out var selectedFolder))
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FileFolderNotInProjectDetails", result.File.Path),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        var alreadySelectedFolder = ReferenceEquals(FolderTreeView.SelectedItem, selectedFolder);
+        selectedFolder.IsSelected = true;
+        selectedFolder.Focus();
+        selectedFolder.BringIntoView();
+
+        if (alreadySelectedFolder)
+        {
+            var folderNode = (FolderTreeNode)selectedFolder.Tag;
+            var folderSearchText = GetFolderSearchText(folderNode);
+            var searchTextChanged = !StringComparer.Ordinal.Equals(SearchTextBox.Text, folderSearchText);
+            _settingFolderSearchText = true;
+            try
+            {
+                SearchTextBox.Text = folderSearchText;
+                SearchTextBox.CaretIndex = SearchTextBox.Text.Length;
+            }
+            finally
+            {
+                _settingFolderSearchText = false;
+            }
+
+            if (!searchTextChanged)
+            {
+                RefreshFolderResults(folderNode);
+            }
+        }
+
+        var targetResult = ResultsListView.Items
+            .OfType<SearchResultItem>()
+            .FirstOrDefault(item => StringComparer.OrdinalIgnoreCase.Equals(item.File.Path, result.File.Path));
+        if (targetResult is null)
+        {
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FileNotInFolderIndexDetails", result.File.Path),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        ResultsListView.SelectedItems.Clear();
+        ResultsListView.SelectedItem = targetResult;
+        ResultsListView.Focus();
+        ResultsListView.ScrollIntoView(targetResult);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (ResultsListView.ItemContainerGenerator.ContainerFromItem(targetResult) is ListViewItem item)
+            {
+                item.BringIntoView();
+                ResultsListView.Focus();
+                item.Focus();
+            }
+        }), DispatcherPriority.ContextIdle);
+    }
+
+    private bool TrySelectFolderInTree(string folderPath, out TreeViewItem selectedItem)
+    {
+        selectedItem = null!;
+        var normalizedFolderPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath));
+        var matchingRootPath = CurrentProject!.Folders
+            .Select(Path.GetFullPath)
+            .Where(rootPath => IsPathWithinFolder(rootPath, normalizedFolderPath))
+            .OrderByDescending(rootPath => rootPath.Length)
+            .FirstOrDefault();
+        if (matchingRootPath is null)
+        {
+            return false;
+        }
+
+        var currentItem = FolderTreeView.Items
+            .OfType<TreeViewItem>()
+            .FirstOrDefault(item => item.Tag is FolderTreeNode node
+                                    && PathsEqual(node.FullPath, matchingRootPath));
+        if (currentItem is null)
+        {
+            return false;
+        }
+
+        var relativePath = Path.GetRelativePath(matchingRootPath, normalizedFolderPath);
+        if (!StringComparer.Ordinal.Equals(relativePath, "."))
+        {
+            var pathParts = relativePath
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+            var expectedPath = matchingRootPath;
+            foreach (var pathPart in pathParts)
+            {
+                currentItem.IsExpanded = true;
+                expectedPath = Path.Combine(expectedPath, pathPart);
+                var nextItem = currentItem.Items
+                    .OfType<TreeViewItem>()
+                    .FirstOrDefault(item => item.Tag is FolderTreeNode node
+                                            && PathsEqual(node.FullPath, expectedPath));
+                if (nextItem is null)
+                {
+                    return false;
+                }
+
+                currentItem = nextItem;
+            }
+        }
+
+        selectedItem = currentItem;
+        return true;
+    }
+
+    private static bool IsPathWithinFolder(string folderPath, string path)
+    {
+        var relativePath = Path.GetRelativePath(folderPath, path);
+        return StringComparer.Ordinal.Equals(relativePath, ".")
+            || (!Path.IsPathRooted(relativePath)
+                && !StringComparer.Ordinal.Equals(relativePath, "..")
+                && !relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal));
+    }
+
+    private static bool PathsEqual(string firstPath, string secondPath)
+    {
+        return StringComparer.OrdinalIgnoreCase.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(firstPath)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(secondPath)));
+    }
+
     private void ShowInExplorerMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var result = _contextMenuTarget;
@@ -1114,6 +1383,9 @@ public partial class MainWindow : Window
     private async void ThumbnailReselectMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var result = _contextMenuTarget;
+        var operationId = Guid.NewGuid().ToString("N");
+        var filePath = result?.File.Path ?? string.Empty;
+        AppLogger.Info("thumbnail-reselect", $"operation={operationId}; stage=start; file={Path.GetFileName(filePath)}");
         var previousSelection = _contextMenuPreviousSelection;
         _contextMenuTarget = null;
         _contextMenuPreviousSelection = [];
@@ -1174,9 +1446,16 @@ public partial class MainWindow : Window
                 Owner = this
             };
             var accepted = selectionWindow.ShowDialog() == true;
+            AppLogger.Info(
+                "thumbnail-reselect",
+                $"operation={operationId}; stage=dialog-closed; accepted={accepted}; generationFailed={selectionWindow.GenerationException is not null}");
             await Dispatcher.InvokeAsync(RestorePreviousSelection, DispatcherPriority.ContextIdle);
             if (selectionWindow.GenerationException is not null)
             {
+                AppLogger.Error(
+                    "thumbnail-reselect-generation",
+                    selectionWindow.GenerationException,
+                    $"operation={operationId}; file={Path.GetFileName(result.File.Path)}");
                 ShowStatusMessage(LocalizationService.Format(
                     "FfmpegThumbnailFailure",
                     Path.GetFileName(result.File.Path)));
@@ -1199,18 +1478,33 @@ public partial class MainWindow : Window
                 return;
             }
 
+            AppLogger.Info(
+                "thumbnail-reselect",
+                $"operation={operationId}; stage=save-start; bytes={selectedCandidate.Data.Length}; file={Path.GetFileName(result.File.Path)}");
             await _thumbnailCache.SaveThumbnailAsync(
                 result.File,
                 selectedCandidate.Data,
                 CancellationToken.None);
             result.Thumbnail = CreateThumbnail(selectedCandidate.Data);
+            AppLogger.Info("thumbnail-reselect", $"operation={operationId}; stage=display-updated");
             ShowStatusMessage(LocalizationService.GetString("ThumbnailSaved"));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException or ArgumentException)
         {
+            AppLogger.Error("thumbnail-reselect", exception, $"operation={operationId}; file={Path.GetFileName(filePath)}");
             MessageBox.Show(
                 this,
                 LocalizationService.Format("ThumbnailSaveErrorDetails", result?.File.Path ?? string.Empty, exception.Message),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+        {
+            AppLogger.Error("thumbnail-reselect-unexpected", exception, $"operation={operationId}; file={Path.GetFileName(filePath)}");
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("ThumbnailSaveErrorDetails", filePath, exception.Message),
                 "Personal Viewer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -1220,6 +1514,10 @@ public partial class MainWindow : Window
             await Dispatcher.InvokeAsync(RestorePreviousSelection, DispatcherPriority.ContextIdle);
             if (resumeThumbnailLoading && currentResults is not null)
             {
+                var pendingCount = currentResults.Count(item => item.Thumbnail is null);
+                AppLogger.Info(
+                    "thumbnail-reselect",
+                    $"operation={operationId}; stage=resume; total={currentResults.Count}; pending={pendingCount}");
                 LoadThumbnails(currentResults);
             }
         }
@@ -1345,6 +1643,24 @@ public partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private static bool IsWithinVisualTree<T>(DependencyObject element) where T : DependencyObject
+    {
+        var current = element;
+        while (current is not null)
+        {
+            if (current is T)
+            {
+                return true;
+            }
+
+            current = current is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(current)
+                : LogicalTreeHelper.GetParent(current);
+        }
+
+        return false;
     }
 
     private void FolderTreeItem_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)

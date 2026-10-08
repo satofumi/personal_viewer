@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using PersonalViewer.Diagnostics;
 using PersonalViewer.Projects;
 
 namespace PersonalViewer.Thumbnails;
@@ -83,8 +84,9 @@ public sealed class WindowsThumbnailCache
             {
                 return LoadCachedThumbnail(cachePath);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
+                AppLogger.ErrorLimited("thumbnail-cache-read", exception, $"cache={Path.GetFileName(cachePath)}");
                 TryDelete(cachePath);
             }
         }
@@ -103,9 +105,10 @@ public sealed class WindowsThumbnailCache
         {
             throw;
         }
-        catch (Exception) when (allowFfmpegFallback)
+        catch (Exception exception) when (allowFfmpegFallback)
         {
             // Use FFmpeg when Windows cannot extract or encode a video thumbnail.
+            AppLogger.ErrorLimited("thumbnail-windows-extract", exception, $"file={Path.GetFileName(file.Path)}");
         }
 
         if (windowsThumbnail is not null)
@@ -437,6 +440,11 @@ public sealed class WindowsThumbnailCache
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
+            if (exception is not OperationCanceledException)
+            {
+                AppLogger.ErrorLimited("thumbnail-cache-write", exception, $"cache={Path.GetFileName(cachePath)}");
+            }
+
             TryDelete(temporaryPath);
         }
     }

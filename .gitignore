@@ -2,6 +2,8 @@
 [Bb]in/
 [Oo]bj/
 
+Samples/
+
 # Visual Studio user settings and caches
 .vs/
 *.suo
