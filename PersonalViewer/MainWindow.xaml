@@ -11,7 +11,8 @@
         Background="#F3F5F8"
         FontFamily="Segoe UI"
         FontSize="13"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        PreviewKeyDown="MainWindow_PreviewKeyDown">
     <Window.Resources>
         <SolidColorBrush x:Key="BorderBrush" Color="#DCE1E8" />
         <SolidColorBrush x:Key="MutedBrush" Color="#77808D" />
@@ -76,9 +77,9 @@
         </ItemsPanelTemplate>
 
         <DataTemplate x:Key="ThumbnailResultTemplate">
-            <Border Width="136"
-                    Margin="2"
-                    Padding="4"
+            <Border Width="104"
+                    Margin="0.5"
+                    Padding="2"
                     Background="White"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1"
@@ -90,17 +91,16 @@
                                Text="{Binding FileName}"
                                TextAlignment="Center"
                                TextTrimming="CharacterEllipsis"
-                               TextWrapping="Wrap"
-                               ToolTip="{Binding FileName}" />
+                               TextWrapping="Wrap" />
                     <Border HorizontalAlignment="Center"
                             VerticalAlignment="Center"
-                            Padding="1"
+                            Padding="0"
                             Background="#F3F5F8"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1">
-                        <Grid MinWidth="96" MinHeight="54">
-                            <Image MaxWidth="96"
-                                   MaxHeight="96"
+                        <Grid MinWidth="80" MinHeight="45">
+                            <Image MaxWidth="80"
+                                   MaxHeight="80"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    Source="{Binding Thumbnail}"
@@ -428,6 +428,16 @@
                                   ContextMenuOpening="ResultsListView_ContextMenuOpening"
                                   SelectionChanged="ResultsListView_SelectionChanged"
                                   GridViewColumnHeader.Click="ResultsListView_ColumnHeaderClick">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="{x:Type ListViewItem}">
+                                    <Setter Property="ToolTipService.InitialShowDelay" Value="0" />
+                                    <Setter Property="ToolTipService.BetweenShowDelay" Value="0" />
+                                    <Setter Property="ToolTipService.ShowDuration" Value="30000" />
+                                    <EventSetter Event="Loaded" Handler="ResultsListViewItem_Loaded" />
+                                    <EventSetter Event="MouseEnter" Handler="ResultsListViewItem_MouseEnter" />
+                                    <EventSetter Event="MouseLeave" Handler="ResultsListViewItem_MouseLeave" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
                             <ListView.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="{loc:Loc ShowInApp}"

@@ -49,7 +49,6 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _keywordSearchCancellation;
     private SearchResultItem? _contextMenuTarget;
     private SearchResultItem[] _contextMenuPreviousSelection = [];
-    private int _ffmpegThumbnailErrorNotificationShown;
     private int _resultsSelectionVersion;
 
     public ProjectInfo? CurrentProject { get; private set; }
@@ -551,6 +550,42 @@ public partial class MainWindow : Window
         RefreshSelectedTagsPanel();
     }
 
+    private void ResultsListViewItem_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ListViewItem item && item.ToolTip is not System.Windows.Controls.ToolTip)
+        {
+            item.ToolTip = new System.Windows.Controls.ToolTip();
+        }
+    }
+
+    private void ResultsListViewItem_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListViewItem item)
+        {
+            return;
+        }
+
+        var tooltip = item.ToolTip as System.Windows.Controls.ToolTip
+            ?? new System.Windows.Controls.ToolTip();
+        tooltip.Content = (item.DataContext as SearchResultItem)?.FileName;
+        item.ToolTip = tooltip;
+        ToolTipService.SetIsEnabled(item, true);
+    }
+
+    private void ResultsListViewItem_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListViewItem item)
+        {
+            return;
+        }
+
+        ToolTipService.SetIsEnabled(item, false);
+        if (item.ToolTip is System.Windows.Controls.ToolTip tooltip)
+        {
+            tooltip.IsOpen = false;
+        }
+    }
+
     private void RefreshSelectedTagsPanel()
     {
         var selectedFiles = ResultsListView.SelectedItems
@@ -623,6 +658,17 @@ public partial class MainWindow : Window
         {
             SetTagInputVisible(visible: true);
         }
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.W || Keyboard.Modifiers != ModifierKeys.Control)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        Close();
     }
 
     private void NewTagTextBox_KeyDown(object sender, KeyEventArgs e)
@@ -899,14 +945,11 @@ public partial class MainWindow : Window
 
         var cancellationSource = new CancellationTokenSource();
         _thumbnailLoadCancellation = cancellationSource;
-        Interlocked.Exchange(ref _ffmpegThumbnailErrorNotificationShown, 0);
-        var allowFfmpegFallback = StringComparer.OrdinalIgnoreCase.Equals(CurrentProject?.MediaType, "Video");
-        _ = LoadThumbnailsAsync(pendingResults, allowFfmpegFallback, cancellationSource.Token);
+        _ = LoadThumbnailsAsync(pendingResults, cancellationSource.Token);
     }
 
     private async Task LoadThumbnailsAsync(
         SearchResultItem[] results,
-        bool allowFfmpegFallback,
         CancellationToken cancellationToken)
     {
         try
@@ -918,7 +961,7 @@ public partial class MainWindow : Window
                     MaxDegreeOfParallelism = ThumbnailLoadConcurrency,
                     CancellationToken = cancellationToken
                 },
-                async (result, token) => await LoadThumbnailAsync(result, allowFfmpegFallback, token));
+                async (result, token) => await LoadThumbnailAsync(result, token));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -929,11 +972,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task LoadThumbnailAsync(SearchResultItem result, bool allowFfmpegFallback, CancellationToken cancellationToken)
+    private async Task LoadThumbnailAsync(SearchResultItem result, CancellationToken cancellationToken)
     {
         try
         {
-            var thumbnailData = await _thumbnailCache.GetThumbnailAsync(result.File, allowFfmpegFallback, cancellationToken);
+            var thumbnailData = await _thumbnailCache.GetThumbnailAsync(result.File, cancellationToken);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (!cancellationToken.IsCancellationRequested)
@@ -944,22 +987,6 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-        }
-        catch (FfmpegThumbnailException exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            AppLogger.ErrorLimited("thumbnail-ffmpeg", exception, $"file={Path.GetFileName(exception.FilePath)}");
-            if (Interlocked.Exchange(ref _ffmpegThumbnailErrorNotificationShown, 1) == 0)
-            {
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (!cancellationToken.IsCancellationRequested)
-                    {
-                        ShowStatusMessage(LocalizationService.Format(
-                            "FfmpegThumbnailFailure",
-                            Path.GetFileName(exception.FilePath)));
-                    }
-                }, DispatcherPriority.Background);
-            }
         }
         catch (Exception exception)
         {
