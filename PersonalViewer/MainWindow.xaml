@@ -430,8 +430,8 @@
                                   GridViewColumnHeader.Click="ResultsListView_ColumnHeaderClick">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="{x:Type ListViewItem}">
-                                    <Setter Property="ToolTipService.InitialShowDelay" Value="0" />
-                                    <Setter Property="ToolTipService.BetweenShowDelay" Value="0" />
+                                    <Setter Property="ToolTipService.InitialShowDelay" Value="500" />
+                                    <Setter Property="ToolTipService.BetweenShowDelay" Value="500" />
                                     <Setter Property="ToolTipService.ShowDuration" Value="30000" />
                                     <EventSetter Event="Loaded" Handler="ResultsListViewItem_Loaded" />
                                     <EventSetter Event="MouseEnter" Handler="ResultsListViewItem_MouseEnter" />
