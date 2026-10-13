@@ -21,6 +21,8 @@ public partial class MainWindow : Window
 {
     private static string ProjectSelectorPlaceholder => LocalizationService.GetString("SelectProject");
     private static readonly object LazyChildPlaceholder = new();
+    private readonly HashSet<string> _visibleFolderTreePaths = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string[]> _folderTreeChildren = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan StatusMessageDuration = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan KeywordSearchDebounceDuration = TimeSpan.FromMilliseconds(180);
     private const int ThumbnailLoadConcurrency = 2;
@@ -250,17 +252,43 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RefreshFolderTree()
+    private void RefreshFolderTree(bool preserveSelection = false)
     {
+        var selectedFolderPath = preserveSelection
+            && FolderTreeView.SelectedItem is TreeViewItem { Tag: FolderTreeNode selectedFolder }
+                ? selectedFolder.FullPath
+                : null;
         SearchTextBox.Clear();
         FolderTreeView.Items.Clear();
+        _visibleFolderTreePaths.Clear();
+        _folderTreeChildren.Clear();
         FolderPlaceholderText.Visibility = CurrentProject is null ? Visibility.Visible : Visibility.Collapsed;
-        if (CurrentProject is null)
+        if (CurrentProject is not { } project)
         {
             return;
         }
 
-        var rootItems = CurrentProject.Folders
+        IReadOnlyList<IndexedFile> indexedFiles;
+        try
+        {
+            indexedFiles = _projectFileIndexStore.Load(project);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or ProjectFileIndexException)
+        {
+            ShowStatusMessage(LocalizationService.GetString("FileListLoadErrorStatus"));
+            MessageBox.Show(
+                this,
+                LocalizationService.Format("FileListLoadErrorDetails", exception.Message),
+                "Personal Viewer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        BuildFolderTreeIndex(indexedFiles, project.Folders);
+        var rootItems = project.Folders
+            .Select(NormalizeFolderPath)
+            .Where(_visibleFolderTreePaths.Contains)
             .Select(folder => CreateFolderTreeItem(folder, folder))
             .ToArray();
         foreach (var rootItem in rootItems)
@@ -272,6 +300,72 @@ public partial class MainWindow : Window
         {
             rootItems[0].IsExpanded = true;
         }
+
+        if (selectedFolderPath is not null && TrySelectFolderInTree(selectedFolderPath, out var selectedItem))
+        {
+            selectedItem.IsSelected = true;
+            selectedItem.Focus();
+            selectedItem.BringIntoView();
+        }
+    }
+
+    private void BuildFolderTreeIndex(IReadOnlyList<IndexedFile> indexedFiles, IEnumerable<string> roots)
+    {
+        var visibleFolderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in roots)
+        {
+            var rootPath = NormalizeFolderPath(root);
+            foreach (var file in indexedFiles)
+            {
+                var containingFolder = Path.GetDirectoryName(Path.GetFullPath(file.Path));
+                if (containingFolder is null || !IsPathWithinFolder(rootPath, containingFolder))
+                {
+                    continue;
+                }
+
+                var currentFolder = NormalizeFolderPath(containingFolder);
+                while (IsPathWithinFolder(rootPath, currentFolder))
+                {
+                    visibleFolderPaths.Add(currentFolder);
+                    if (PathsEqual(currentFolder, rootPath))
+                    {
+                        break;
+                    }
+
+                    var parentFolder = Path.GetDirectoryName(currentFolder);
+                    if (parentFolder is null)
+                    {
+                        break;
+                    }
+
+                    currentFolder = NormalizeFolderPath(parentFolder);
+                }
+            }
+        }
+
+        var childFolderPaths = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var folderPath in visibleFolderPaths)
+        {
+            var parentFolder = Path.GetDirectoryName(folderPath);
+            if (parentFolder is null || !visibleFolderPaths.Contains(parentFolder))
+            {
+                continue;
+            }
+
+            if (!childFolderPaths.TryGetValue(parentFolder, out var children))
+            {
+                children = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                childFolderPaths.Add(parentFolder, children);
+            }
+
+            children.Add(folderPath);
+        }
+
+        _visibleFolderTreePaths.UnionWith(visibleFolderPaths);
+        _folderTreeChildren = childFolderPaths.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     private TreeViewItem CreateFolderTreeItem(string folderPath, string rootPath)
@@ -283,7 +377,9 @@ public partial class MainWindow : Window
             folderName = fullPath;
         }
 
-        var folderNode = new FolderTreeNode(fullPath, Path.GetFullPath(rootPath), HasSubfolders(fullPath));
+        var hasVisibleSubfolders = _folderTreeChildren.TryGetValue(fullPath, out var childFolders)
+            && childFolders.Length > 0;
+        var folderNode = new FolderTreeNode(fullPath, Path.GetFullPath(rootPath), hasVisibleSubfolders);
         var item = new TreeViewItem
         {
             Header = CreateFolderHeader(folderName),
@@ -1727,19 +1823,6 @@ public partial class MainWindow : Window
         return header;
     }
 
-    private static bool HasSubfolders(string folderPath)
-    {
-        try
-        {
-            using var directories = Directory.EnumerateDirectories(folderPath).GetEnumerator();
-            return directories.MoveNext();
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
-        {
-            return false;
-        }
-    }
-
     private void FolderTreeItem_Expanded(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource is not TreeViewItem item
@@ -1752,24 +1835,14 @@ public partial class MainWindow : Window
         }
 
         item.Items.Clear();
-        try
+        if (!_folderTreeChildren.TryGetValue(folderNode.FullPath, out var subfolders))
         {
-            var subfolders = Directory.EnumerateDirectories(folderNode.FullPath)
-                .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            foreach (var subfolder in subfolders)
-            {
-                item.Items.Add(CreateFolderTreeItem(subfolder, folderNode.RootPath));
-            }
+            return;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+
+        foreach (var subfolder in subfolders)
         {
-            item.Items.Add(new TreeViewItem
-            {
-                Header = LocalizationService.GetString("FolderUnreadable"),
-                IsEnabled = false
-            });
-            ShowStatusMessage(LocalizationService.Format("SubfolderLoadError", Path.GetFileName(folderNode.FullPath)));
+            item.Items.Add(CreateFolderTreeItem(subfolder, folderNode.RootPath));
         }
     }
 
@@ -1989,6 +2062,12 @@ public partial class MainWindow : Window
                 scannedFolders,
                 scanResult.Files,
                 scanResult.IncompletePaths));
+
+            if (IsVisible && CurrentProject is { } currentProject
+                && StringComparer.OrdinalIgnoreCase.Equals(currentProject.ProjectId, project.ProjectId))
+            {
+                RefreshFolderTree(preserveSelection: true);
+            }
 
             if (IsVisible)
             {
