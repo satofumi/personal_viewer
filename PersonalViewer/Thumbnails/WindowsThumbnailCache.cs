@@ -133,8 +133,8 @@ public sealed class WindowsThumbnailCache
             }
 
             var duration = GetVideoDuration(filePath, cancellationToken);
-            var candidates = new List<ThumbnailCandidate>(12);
-            foreach (var second in new[] { 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233 }.Where(second => second < duration.TotalSeconds))
+            var candidates = new List<ThumbnailCandidate>(15);
+            foreach (var second in new[] { 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987 }.Where(second => second < duration.TotalSeconds))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var sampleTime = TimeSpan.FromSeconds(second);

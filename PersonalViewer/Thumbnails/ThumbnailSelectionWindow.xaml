@@ -43,7 +43,7 @@
                  SelectionChanged="CandidateListBox_SelectionChanged">
             <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <UniformGrid Columns="4" Rows="3" />
+                    <UniformGrid Columns="5" Rows="3" />
                 </ItemsPanelTemplate>
             </ListBox.ItemsPanel>
             <ListBox.ItemContainerStyle>
@@ -85,8 +85,8 @@
                                 BorderBrush="#DCE1E8"
                                 BorderThickness="1"
                                 Padding="1">
-                            <Image MaxWidth="96"
-                                   MaxHeight="96"
+                            <Image MaxWidth="80"
+                                   MaxHeight="80"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    Source="{Binding Preview}"
